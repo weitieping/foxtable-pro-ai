@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 运行期 AI 面板: 随开发者的系统发给最终用户, 只用狐表公开接口。狐表目录由 FoxtableDir 指定, 见 Directory.Build.props -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <RootNamespace>FoxtablePro</RootNamespace>
+    <AssemblyName>Foxtable.Pro.AI</AssemblyName>
+    <Version>0.1.0</Version>
+    <Authors>payne</Authors>
+    <Product>FoxTablePro</Product>
+    <OptionStrict>On</OptionStrict>
+    <OptionInfer>On</OptionInfer>
+    <PlatformTarget>x86</PlatformTarget>
+    <GenerateDocumentationFile>True</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);42309</NoWarn>
+    <PanelWebDir>$(MSBuildThisFileDirectory)web\</PanelWebDir>
+    <PanelHtml>$(PanelWebDir)dist\index.html</PanelHtml>
+    <DefaultItemExcludes>$(DefaultItemExcludes);web\node_modules\**;web\dist\**</DefaultItemExcludes>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <OutputPath>$(MSBuildThisFileDirectory)..\dist\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Import Include="System.Collections.Generic" />
+    <Import Include="System.Linq" />
+    <Import Include="Newtonsoft.Json.Linq" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 都用狐表目录里自带的那份, 不随包分发 -->
+    <Reference Include="Foxtable">
+      <HintPath>$(FoxtableDir)\foxtable.exe</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(FoxtableDir)\Newtonsoft.Json.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <!-- 按狐表 2026-11-16 自带的 1.0.3650.58 编译, 只用这一版有的接口 -->
+    <Reference Include="Microsoft.Web.WebView2.Core">
+      <HintPath>$(FoxtableDir)\Microsoft.Web.WebView2.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Microsoft.Web.WebView2.WinForms">
+      <HintPath>$(FoxtableDir)\Microsoft.Web.WebView2.WinForms.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+
+  <!-- 网页: web/ 下 npm run build 出单文件 dist/index.html, 嵌进 DLL。SkipPanelWeb=true 时不重新打包网页 -->
+  <ItemGroup>
+    <PanelWebSrc Include="$(PanelWebDir)src\**\*;$(PanelWebDir)index.html;$(PanelWebDir)package.json;$(PanelWebDir)vite.config.ts" />
+    <EmbeddedResource Include="$(PanelHtml)" LogicalName="FoxtablePro.AI.panel.html" Condition="Exists('$(PanelHtml)') Or '$(SkipPanelWeb)' != 'true'" />
+  </ItemGroup>
+  <Target Name="CheckFoxtableDir" BeforeTargets="ResolveAssemblyReferences;BuildPanelWeb">
+    <Error Condition="!Exists('$(FoxtableDir)\foxtable.exe')" Text="找不到狐表: $(FoxtableDir)\foxtable.exe。设环境变量 FOXTABLE_DIR 或传 /p:FoxtableDir= 指向狐表安装目录 (2026-11-16 或更新的版本)。" />
+  </Target>
+  <Target Name="BuildPanelWeb" BeforeTargets="BeforeBuild;PrepareForBuild" Condition="'$(SkipPanelWeb)' != 'true'" Inputs="@(PanelWebSrc)" Outputs="$(PanelHtml)">
+    <Exec Command="npm install --no-audit --no-fund" WorkingDirectory="$(PanelWebDir)" Condition="!Exists('$(PanelWebDir)node_modules')" />
+    <Exec Command="npm run build" WorkingDirectory="$(PanelWebDir)" />
+  </Target>
+</Project>

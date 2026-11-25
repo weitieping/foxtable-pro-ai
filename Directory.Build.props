@@ -1,0 +1,11 @@
+<Project>
+  <!-- 作为 git 子模块放进别的仓库时, 先接上外层的 Directory.Build.props, 由它给出 FoxtableDir -->
+  <PropertyGroup>
+    <OuterBuildProps>$([MSBuild]::GetPathOfFileAbove(Directory.Build.props, $(MSBuildThisFileDirectory)..))</OuterBuildProps>
+  </PropertyGroup>
+  <Import Project="$(OuterBuildProps)" Condition="'$(OuterBuildProps)' != ''" />
+  <PropertyGroup>
+    <!-- 狐表安装目录 (含 foxtable.exe)。优先 /p:FoxtableDir=, 其次环境变量 FOXTABLE_DIR -->
+    <FoxtableDir Condition="'$(FoxtableDir)' == ''">$(FOXTABLE_DIR)</FoxtableDir>
+  </PropertyGroup>
+</Project>
