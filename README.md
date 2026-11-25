@@ -215,7 +215,7 @@ dotnet build -c Release -p:FoxtableDir=D:\foxtable
 | `src/Panel/` | WebView2 面板宿主 |
 | `src/Runtime/` | 按名字绑定狐表对象、调用大模型 |
 | `src/web/` | 面板网页（React + Vite） |
-| `demo/` | 做好的示例工程，如 `基本示例.Table` |
+| `examples/` | 做好的示例工程，如 `基本示例.Table` |
 | `skills/` | 给 AI 客户端用的技能，用来起草技能库 |
 
 ## 安全说明
