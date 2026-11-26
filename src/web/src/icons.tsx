@@ -54,6 +54,13 @@ export const IconSheet = () => (
   </Svg>
 );
 
+export const IconChart = () => (
+  <Svg size={16}>
+    <path d="M3 3v18h18" />
+    <path d="M7 15v2M11 11v6M15 7v10M19 12v5" />
+  </Svg>
+);
+
 export const IconSparkle = ({ size = 18 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
     <path d="M12 2.5c.4 4.6 2.9 7.1 7.5 7.5-4.6.4-7.1 2.9-7.5 7.5-.4-4.6-2.9-7.1-7.5-7.5 4.6-.4 7.1-2.9 7.5-7.5Z" />

@@ -564,6 +564,8 @@ Namespace AI
                             tool("status") = "done"
                             tool("summary") = outcome.Summary
                             If outcome.Table IsNot Nothing Then tool("table") = outcome.Table
+                            ' 图表数据只给界面 (可多达 500 组), 给模型的是 outcome.Result 里截断后的结果
+                            If outcome.Chart IsNot Nothing Then tool("chart") = outcome.Chart
                             If outcome.Open IsNot Nothing AndAlso outcome.Open.Usable Then
                                 _opens(CStr(tool("id"))) = outcome.Open
                                 tool("open") = True

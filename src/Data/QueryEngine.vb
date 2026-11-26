@@ -345,9 +345,39 @@ Namespace AI
                     Case "year" : Return d.Year.ToString("0000")
                     Case "quarter" : Return d.Year.ToString("0000") & "-Q" & ((d.Month - 1) \ 3 + 1)
                     Case "month" : Return d.ToString("yyyy-MM", CultureInfo.InvariantCulture)
-                    Case "weekday" : Return "日一二三四五六".Substring(CInt(d.DayOfWeek), 1).Insert(0, "星期")
+                    Case "weekday" : Return New WeekdayKey(d.DayOfWeek)
                     Case Else : Return d.Date
                 End Select
+            End Function
+        End Class
+
+        ''' 星期分组的键: 显示为 星期一, 按星期一到星期日排序 (按文字排是乱的)。
+        Private NotInheritable Class WeekdayKey
+            Implements IComparable
+            ''' 0 = 星期一 … 6 = 星期日
+            Private ReadOnly _index As Integer
+
+            Public Sub New(d As DayOfWeek)
+                _index = (CInt(d) + 6) Mod 7
+            End Sub
+
+            Public Overrides Function ToString() As String
+                Return "星期" & "一二三四五六日".Substring(_index, 1)
+            End Function
+
+            Public Function CompareTo(obj As Object) As Integer Implements IComparable.CompareTo
+                Dim o = TryCast(obj, WeekdayKey)
+                If o Is Nothing Then Return -1
+                Return _index.CompareTo(o._index)
+            End Function
+
+            Public Overrides Function Equals(obj As Object) As Boolean
+                Dim o = TryCast(obj, WeekdayKey)
+                Return o IsNot Nothing AndAlso o._index = _index
+            End Function
+
+            Public Overrides Function GetHashCode() As Integer
+                Return _index
             End Function
         End Class
 
@@ -360,7 +390,8 @@ Namespace AI
         Private Shared ReadOnly PartNames As New Dictionary(Of String, String) From {
             {"year", "年"}, {"quarter", "季度"}, {"month", "月"}, {"day", "日"}, {"weekday", "星期"}}
 
-        Public Function Aggregate(args As JObject, maxGroups As Integer) As ToolOutcome
+        ''' 分组统计。charts: 能不能出图 (开发者没关掉图表); 能出图时按 args("chart") 画图, 图表数据与给模型的分开。
+        Public Function Aggregate(args As JObject, maxGroups As Integer, Optional charts As Boolean = False) As ToolOutcome
             ' 分组
             Dim keys As New List(Of GroupKey)
             Dim gb = args("group_by")
@@ -466,7 +497,49 @@ Namespace AI
             Dim display = keys.Select(Function(k) k.Column.Display & If(k.Part = "", "", "(" & PartNames(k.Part) & ")")).
                           Concat(metrics.Select(Function(m) MetricDisplay(m)))
             Dim summary = If(keys.Count = 0, "统计了 " & rows.Count & " 行", rows.Count & " 行, " & result.Count & " 组")
-            Return New ToolOutcome(res, summary, UiTable(_info.Display, display, data, result.Count)) With {.Open = OpenOf(rows, args("where"))}
+            Dim outcome = New ToolOutcome(res, summary, UiTable(_info.Display, display, data, result.Count)) With {.Open = OpenOf(rows, args("where"))}
+
+            ' 出图: 只用这次统计的结果。模型指定了 limit (如前 10 名) 就只画这几组, 否则画全部 (最多 500 组)
+            Dim chartArg = args("chart")
+            If chartArg IsNot Nothing AndAlso chartArg.Type <> JTokenType.Null Then
+                If Not charts Then
+                    res("chart_error") = "当前不支持出图, 用表格和文字回答。"
+                Else
+                    Dim cols = keys.Select(Function(k) ChartColumnOf(k)).Concat(metrics.Select(Function(m) ChartColumnOf(m, metrics))).ToList()
+                    Dim explicitLimit = args("limit") IsNot Nothing AndAlso args("limit").Type <> JTokenType.Null
+                    Dim explicitOrder = ob IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(CStr(ob("by")))
+                    Dim c = ChartBuilder.Build(chartArg, cols, If(explicitLimit, picked, result), picked.Count, explicitOrder, _info.PartiallyLoaded)
+                    If c.Failed Then
+                        res("chart_error") = c.Message
+                    Else
+                        res("chart") = c.Message
+                        outcome.Chart = c.Chart
+                    End If
+                End If
+            End If
+            Return outcome
+        End Function
+
+        Private Shared Function ChartColumnOf(k As GroupKey) As ChartColumn
+            Dim c As New ChartColumn With {.Label = k.Label, .Display = k.Column.Display & If(k.Part = "", "", "(" & PartNames(k.Part) & ")"),
+                                           .IsKey = True, .IsTime = k.Column.Kind = ColumnKind.Date}
+            c.Aliases.Add(k.Column.Name)
+            If Not String.IsNullOrEmpty(k.Column.Caption) Then c.Aliases.Add(k.Column.Caption)
+            Return c
+        End Function
+
+        Private Shared Function ChartColumnOf(m As Metric, all As List(Of Metric)) As ChartColumn
+            Dim c As New ChartColumn With {.Label = m.Label, .Display = MetricDisplay(m)}
+            ' 只有一项是这个函数、或只有一项用这一列时, 也认 "sum"、"金额" 这类简写
+            If all.Where(Function(x) x.Func = m.Func).Count() = 1 Then c.Aliases.Add(m.Func)
+            If m.Column IsNot Nothing Then
+                c.Aliases.Add(m.Func & "(" & m.Column.Display & ")")
+                If all.Where(Function(x) x.Column Is m.Column).Count() = 1 Then
+                    c.Aliases.Add(m.Column.Name)
+                    If Not String.IsNullOrEmpty(m.Column.Caption) Then c.Aliases.Add(m.Column.Caption)
+                End If
+            End If
+            Return c
         End Function
 
         Private Shared Function MetricDisplay(m As Metric) As String
@@ -621,6 +694,8 @@ Namespace AI
         Public ReadOnly Table As JObject
         ''' 可以"在狐表中打开"的行。
         Public Property Open As OpenTarget
+        ''' 给界面的图表 (只给界面, 不进模型的历史)。
+        Public Property Chart As JObject
 
         Public Sub New(result As JObject, summary As String, Optional table As JObject = Nothing)
             Me.Result = result

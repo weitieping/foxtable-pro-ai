@@ -1,8 +1,8 @@
 // 模拟宿主: 在浏览器里回放 DLL 会发的各种消息, 前端脱离狐表开发。
 // 状态存 sessionStorage, 刷新页面后照样要快照还原, 与真实 DLL 的行为一致。
 // 问题里带"错误"回放失败, 带"慢"回放慢速输出 (测停止), 带"明细"回放查询明细, 带"新增"回放写入确认卡片,
-// 带"填"或附了图片回放填窗口, 其余回放统计。
-import type { Attachment, Config, HostEvent, Message, ResultTable, ToolCall, WebMessage } from "./protocol";
+// 带"填"或附了图片回放填窗口, 带"图表"回放每种图表各一张 (?ask=图表 打开就看), 其余回放统计。
+import type { Attachment, ChartData, Config, HostEvent, Message, ResultTable, ToolCall, WebMessage } from "./protocol";
 import type { Host } from "./host";
 
 const KEY = "proai-mock-state";
@@ -19,11 +19,12 @@ const config: Config = {
   welcome: "你好，我可以帮你查询和统计系统里的数据。",
   theme: "#2563eb",
   placeholder: "输入问题，Enter 发送，Shift+Enter 换行",
-  quick: ["本月销售额是多少？", "各产品的销售额（明细）", "新增一张订单", "把这张单填进订单录入", "制造一个错误"],
+  quick: ["图表样例", "本月销售额是多少？", "各产品的销售额（明细）", "新增一张订单", "把这张单填进订单录入", "制造一个错误"],
   images: true,
   files: true,
   voice: true,
   closable: true,
+  charts: true,
 };
 
 const salesTable: ResultTable = {
@@ -171,6 +172,7 @@ export function createMockHost(): Host {
       later(t + 100, () => finish(aid, { status: "done" }));
       return;
     }
+    if (text.includes("图表")) return replayCharts(aid);
     if (text.includes("新增")) return replayWrite(aid);
     if (text.includes("出库")) return replayAction(aid);
     if (text.includes("填") || draft.some((a) => a.kind === "image")) return replayFill(aid);
@@ -195,6 +197,20 @@ export function createMockHost(): Host {
     );
     t = stream(aid, "answer", answer, t + 300, 30, 4);
     later(t + 100, () => finish(aid, { status: "done", usage: { prompt_tokens: 2142, completion_tokens: 263 } }));
+  }
+
+  function replayCharts(aid: string) {
+    let t = stream(aid, "think", "用户想看各种图表的样子：每种类型各统计一次并附上 chart。", 200, 30);
+    chartSamples().forEach(([label, chart], i) => {
+      const tool: ToolCall = { id: `${aid}-t${i + 1}`, name: "aggregate", label, status: "running" };
+      later(t, () => emit({ type: "tool", id: aid, tool }));
+      t += 250;
+      const table = chartTable(chart);
+      later(t, () => emit({ type: "tool", id: aid, tool: { ...tool, status: "done", summary: `${chart.categories.length} 组`, table, chart } }));
+      t += 100;
+    });
+    t = stream(aid, "answer", "以上是每种图表的样例：折线、面积 (365 天)、柱状、横向柱状、堆叠柱状、饼图 (30 个客户, 前 8 块之外合并为“其他”)、环形和组合图。", t + 200, 20, 6);
+    later(t + 100, () => finish(aid, { status: "done" }));
   }
 
   function replayWrite(aid: string) {
@@ -381,4 +397,66 @@ export function createMockHost(): Host {
       return () => subs.delete(cb);
     },
   };
+}
+
+// ---------- 图表样例 ----------
+
+const months = Array.from({ length: 12 }, (_, i) => `2026-${String(i + 1).padStart(2, "0")}`);
+const monthSales = [182300, 164500, 201800, 226400, 248900, 273100, 259800, 281600, 305200, 296700, 331500, 358900];
+const monthOrders = [96, 88, 104, 117, 125, 139, 131, 142, 151, 149, 163, 176];
+
+function chartSamples(): [string, ChartData][] {
+  const singles = ["bar", "bar_horizontal", "line", "area", "pie", "donut"] as const;
+  const days = Array.from({ length: 365 }, (_, i) => new Date(Date.UTC(2026, 0, 1 + i)).toISOString().slice(0, 10));
+  const daySales = days.map((_, i) => Math.round(6000 + 2500 * Math.sin(i / 9) + 1800 * Math.sin(i / 2.3) + i * 12));
+  const reps = ["张伟", "王芳", "李娜", "刘洋", "陈静", "杨磊", "赵敏", "黄晓明", "周杰", "吴婷婷", "郑凯", "孙悦"];
+  const customers = Array.from({ length: 30 }, (_, i) => `客户${String(i + 1).padStart(2, "0")}`);
+  const cats = ["家电", "服装", "食品", "数码", "家居"];
+  return [
+    ["统计 订单 · 每月销售额", {
+      type: "line", types: [...singles], title: "2026 年每月销售额", x: "日期(月)", categories: months,
+      series: [{ name: "金额 合计", data: monthSales }],
+    }],
+    ["统计 订单 · 每天销售额", {
+      type: "area", types: [...singles], title: "每天销售额 (365 天)", x: "日期(日)", categories: days,
+      series: [{ name: "金额 合计", data: daySales }],
+    }],
+    ["统计 订单 · 各类别销售额", {
+      type: "bar", types: [...singles], title: "各产品类别销售额排名", x: "产品类别", categories: ["家电", "数码", "服装", "家居", "食品"],
+      series: [{ name: "金额 合计", data: [1186500, 902300, 534800, 318900, 147600] }],
+    }],
+    ["统计 订单 · 各业务员销售额", {
+      type: "bar_horizontal", types: [...singles], title: "各业务员销售额", x: "业务员", categories: reps,
+      series: [{ name: "金额 合计", data: reps.map((_, i) => 420000 - i * 27500 + (i % 3) * 8000) }],
+    }],
+    ["统计 订单 · 各月各类别销售额", {
+      type: "bar_stacked", types: ["line", "bar", "bar_stacked", "bar_horizontal", "area"], title: "金额 合计 · 按 日期(月)、产品类别",
+      x: "日期(月)", y: "金额 合计", categories: months,
+      series: cats.map((name, k) => ({ name, data: monthSales.map((v, i) => (k === 4 && i === 2 ? null : Math.round((v * [0.36, 0.27, 0.17, 0.12, 0.08][k] * (1 + ((i + k) % 4) / 20))))) })),
+    }],
+    ["统计 订单 · 各客户销售额占比", {
+      type: "pie", types: [...singles], title: "各客户销售额占比 (30 个客户)", x: "客户", categories: customers,
+      series: [{ name: "金额 合计", data: customers.map((_, i) => Math.round(260000 / (i + 1.6))) }],
+    }],
+    ["统计 订单 · 各类别订单数占比", {
+      type: "donut", types: [...singles], title: "各类别订单数占比", x: "产品类别", categories: cats,
+      series: [{ name: "订单数", data: [412, 356, 298, 187, 96] }],
+    }],
+    ["统计 订单 · 每月销售额和订单数", {
+      type: "combo", types: ["combo", "bar", "bar_horizontal", "line"], title: "每月销售额和订单数", x: "日期(月)", categories: months,
+      series: [{ name: "金额 合计", data: monthSales }, { name: "订单数", data: monthOrders, axis: 1 }],
+    }],
+    ["统计 订单 · 按星期统计订单数", {
+      type: "bar", types: [...singles], title: "按星期统计订单数", x: "日期(星期)",
+      categories: ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"],
+      series: [{ name: "行数", data: [231, 248, 226, 259, 274, 162, 118] }],
+    }],
+  ];
+}
+
+/** 工具卡片上的结果表格 (与图表同一份数) */
+function chartTable(c: ChartData): ResultTable {
+  const columns = [c.x, ...c.series.map((s) => s.name)];
+  const rows = c.categories.slice(0, 50).map((cat, i) => [cat, ...c.series.map((s) => s.data[i])]);
+  return { title: "订单", columns, rows, total: c.categories.length };
 }

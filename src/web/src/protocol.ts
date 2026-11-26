@@ -12,6 +12,8 @@ export interface Config {
   files?: boolean;
   /** 配了语音识别接口, 显示麦克风按钮 */
   voice?: boolean;
+  /** 能出图 (ai.AllowCharts); false 时不显示任何图表 */
+  charts?: boolean;
   /** 停靠在主窗口侧栏里, 顶栏显示关闭按钮 */
   closable?: boolean;
 }
@@ -44,6 +46,32 @@ export interface ResultTable {
   total: number;
 }
 
+/** 图表类型。与 FoxTablePro.AI/Data/ChartBuilder.vb 一致 */
+export type ChartType = "bar" | "bar_horizontal" | "bar_stacked" | "line" | "area" | "pie" | "donut" | "combo";
+
+export interface ChartSeries {
+  name: string;
+  /** 与 categories 一一对应, 没有数据为 null */
+  data: (number | null)[];
+  /** 1: 组合图里画在右轴的折线 */
+  axis?: 1;
+}
+
+/** 统计结果画成的图。数字都由 DLL 从统计结果里取, 模型只决定画法 */
+export interface ChartData {
+  type: ChartType;
+  /** 数据形状允许切换到的类型 */
+  types: ChartType[];
+  title: string;
+  /** 横轴 (饼图为分块) 的名字 */
+  x: string;
+  categories: string[];
+  series: ChartSeries[];
+  /** 拆成多条系列时, 数值是哪个统计项 */
+  y?: string;
+  note?: string;
+}
+
 export type ToolStatus = "running" | "confirm" | "done" | "error" | "cancelled";
 
 export interface ToolCall {
@@ -53,6 +81,8 @@ export interface ToolCall {
   status: ToolStatus;
   summary?: string;
   table?: ResultTable;
+  /** 统计时附带的图表 */
+  chart?: ChartData;
   confirm?: ConfirmPreview;
   decision?: "approved" | "rejected" | "timeout";
   /** 可以在狐表中打开 */

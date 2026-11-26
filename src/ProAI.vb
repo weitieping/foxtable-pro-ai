@@ -95,8 +95,20 @@ Public NotInheritable Class ProAI
         End Set
     End Property
 
+    ''' AI 统计完能不能直接出图 (柱状、折线、饼图等), 默认能。设为 False 则不出任何图表, 只用表格和文字回答。
+    Public Property AllowCharts As Boolean
+        Get
+            Return _allowCharts
+        End Get
+        Set(value As Boolean)
+            _allowCharts = value
+            _session.PushConfig()
+        End Set
+    End Property
+
     Private _allowImages As Boolean
     Private _allowFiles As Boolean
+    Private _allowCharts As Boolean = True
 
     ''' 开启语音输入: 输入框旁出现麦克风, 说完转成文字填进输入框。url 为空则关闭。
     ''' DeepSeek: SetSpeech("https://api.deepseek.com/v1/tools/asr", "", key), 不用填模型, key 与对话的相同。
@@ -281,6 +293,7 @@ Public NotInheritable Class ProAI
             {"quick", New JArray(QuickQuestions.Cast(Of Object)().ToArray())},
             {"images", _allowImages},
             {"files", _allowFiles},
+            {"charts", _allowCharts},
             {"voice", _speech IsNot Nothing},
             {"closable", _host IsNot Nothing AndAlso _host.InSidebar}}
     End Function
@@ -321,7 +334,7 @@ Public NotInheritable Class ProAI
         Dim formTools As New FormTools(_forms.VisibleTo(w), _fillTracker)
         Dim custom As New CustomTools(_functions.VisibleTo(w).Concat(_tools.VisibleTo(w)).ToList(), w, MaxRows)
         Dim box As New Toolbox()
-        box.Add(New ReadTools(tables, MaxRows, skills))
+        box.Add(New ReadTools(tables, MaxRows, skills, _allowCharts))
         box.Add(New WriteTools(tables, files))
         box.Add(formTools)
         box.Add(New FileTools(files))
@@ -382,6 +395,15 @@ Public NotInheritable Class ProAI
         sb.AppendLine("- 只回答这些表能回答的问题; 超出范围时说明你能查哪些数据。")
         sb.AppendLine("- 用中文回答, 先给结论再给明细。多行结果用 Markdown 表格, 行多时只列前若干行并说明总数。金额保留两位小数。")
         sb.AppendLine("- 工具结果里有 note 或 partial 时, 在回答中如实提示 (如只显示了部分、只统计了已加载的数据)。")
+        If tables.Count > 0 Then
+            If _allowCharts Then
+                sb.AppendLine("- 统计结果适合看图 (趋势、比较、占比) 时, 在 aggregate 里附上 chart, 系统统计完直接出图; 不要自己画字符图或给图表代码。" &
+                              "出了图 (结果里有 chart) 就不必再列完整表格, 说结论和要点; 结果里有 chart_error 时按原因改正, 或者不出图直接回答。" &
+                              "用户要换图表类型时, 可以提示他在图表上点切换, 也可以用新的 chart 再统计一次。")
+            Else
+                sb.AppendLine("- 当前不支持画图表。用户要图表时, 说明目前不支持, 用表格和文字回答。")
+            End If
+        End If
         sb.Append("- 今天是 ").Append(today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)).Append(", ").
            Append(CultureInfo.GetCultureInfo("zh-CN").DateTimeFormat.GetDayName(today.DayOfWeek)).AppendLine("。")
         If skills.Overview <> "" Then
@@ -464,7 +486,7 @@ Public NotInheritable Class ProAI
     End Function
 
     ''' 自测用: 不经模型直接调一个工具 (工具名, 或第 4 档工具的显示名), 确认卡片按 approve 自动回答。
-    ''' 返回 {"result","summary"} 或 {"error"}, 弹过确认卡片时带 "preview"。
+    ''' 返回 {"result","summary"} 或 {"error"}, 弹过确认卡片时带 "preview", 出了图时带 "chart"。
     <ComponentModel.EditorBrowsable(ComponentModel.EditorBrowsableState.Never)>
     Public Function ToolTest(name As String, argsJson As String, approve As Boolean) As String
         Dim setup = PrepareTurn(_session.Files)
@@ -481,6 +503,7 @@ Public NotInheritable Class ProAI
             Dim o = setup.Tools.Execute(actual, If(String.IsNullOrWhiteSpace(argsJson), New JObject(), JObject.Parse(argsJson)), ctx)
             res("result") = o.Result
             res("summary") = o.Summary
+            If o.Chart IsNot Nothing Then res("chart") = o.Chart
         Catch ex As Exception
             res("error") = ex.GetBaseException().Message
         End Try

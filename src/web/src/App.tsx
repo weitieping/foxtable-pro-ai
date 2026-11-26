@@ -13,6 +13,7 @@ import {
   type ToolCall,
 } from "./protocol";
 import { readAttachment } from "./files";
+import { ChartCard } from "./Chart";
 import { useVoice } from "./voice";
 import { IconArrowUp, IconCheck, IconClose, IconMic, IconNewChat, IconPaperclip, IconSheet, IconSparkle } from "./icons";
 
@@ -24,6 +25,8 @@ declare global {
       send: (text: string) => void;
       confirm: (id: string, ok: boolean) => void;
       open: (id: string) => void;
+      /** 面板打开到第一次显示出对话 (收到快照) 的毫秒数, 从网页开始加载算起 */
+      ready?: number;
     };
   }
 }
@@ -49,6 +52,15 @@ export function App() {
   useEffect(() => {
     document.title = state.config.title || "AI 助手";
   }, [state.config.title]);
+
+  // 记下首次打开的耗时 (验收: 引入图表后增加不超过 0.5 秒)
+  useEffect(() => {
+    if (!state.connected || !window.__proai || window.__proai.ready !== undefined) return;
+    requestAnimationFrame(() => {
+      if (window.__proai) window.__proai.ready = Math.round(performance.now());
+      console.info(`面板就绪 ${Math.round(performance.now())} ms`);
+    });
+  }, [state.connected]);
 
   // 提示条几秒后自动消失
   useEffect(() => {
@@ -178,6 +190,8 @@ function MessageList({ state, onSend }: { state: State; onSend: (text: string) =
             <AssistantMessage
               key={m.id}
               m={m}
+              charts={state.config.charts !== false}
+              theme={state.config.theme || "#2563eb"}
               onRetry={() => {
                 const q = state.messages[i - 1];
                 if (q?.role === "user") onSend(q.text);
@@ -245,7 +259,8 @@ function Welcome({ title, text, quick, onSend }: { title: string; text: string; 
   );
 }
 
-function AssistantMessage({ m, onRetry, canRetry }: { m: Message; onRetry: () => void; canRetry: boolean }) {
+function AssistantMessage(props: { m: Message; onRetry: () => void; canRetry: boolean; charts: boolean; theme: string }) {
+  const { m, onRetry, canRetry } = props;
   const streaming = m.status === "streaming";
   const html = useMemo(() => (m.text ? renderMarkdown(m.text) : ""), [m.text]);
   const waiting = streaming && !m.text && !m.think && !(m.tools?.length);
@@ -253,7 +268,7 @@ function AssistantMessage({ m, onRetry, canRetry }: { m: Message; onRetry: () =>
   return (
     <div className="msg assistant">
       {m.think ? <Think text={m.think} active={streaming && !m.text} /> : null}
-      {m.tools?.map((t) => <ToolLine key={t.id} t={t} />)}
+      {m.tools?.map((t) => <ToolLine key={t.id} t={t} charts={props.charts} theme={props.theme} />)}
       {html && <div className={"md" + (streaming ? " streaming" : "")} dangerouslySetInnerHTML={{ __html: html }} />}
       {waiting && (
         <div className="pending">
@@ -293,7 +308,7 @@ function Think({ text, active }: { text: string; active: boolean }) {
   );
 }
 
-function ToolLine({ t }: { t: ToolCall }) {
+function ToolLine({ t, charts, theme }: { t: ToolCall; charts: boolean; theme: string }) {
   const [open, setOpen] = useState(false);
   if (t.confirm) return <ConfirmCard t={t} c={t.confirm} />;
   const icon = t.status === "running" ? <span className="spin" /> : t.status === "done" ? <IconCheck size={13} /> : t.status === "error" ? "!" : "–";
@@ -310,6 +325,7 @@ function ToolLine({ t }: { t: ToolCall }) {
         {t.open && t.status === "done" && <OpenButton id={t.id} />}
       </div>
       {open && t.table && <TableView table={t.table} />}
+      {charts && t.chart && t.status === "done" && <ChartCard chart={t.chart} theme={theme} renderTable={(tbl) => <TableView table={tbl} />} />}
     </div>
   );
 }

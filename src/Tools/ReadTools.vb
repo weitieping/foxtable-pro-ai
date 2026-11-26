@@ -13,12 +13,14 @@ Namespace AI
         Private ReadOnly _tables As List(Of TableInfo)
         Private ReadOnly _maxRows As Integer
         Private ReadOnly _skills As SkillCatalog
+        Private ReadOnly _charts As Boolean
 
-        ''' tables: 本轮开始时读出的放行表结构; skills: 本轮这个用户能看的技能库。
-        Public Sub New(tables As List(Of TableInfo), maxRows As Integer, skills As SkillCatalog)
+        ''' tables: 本轮开始时读出的放行表结构; skills: 本轮这个用户能看的技能库; charts: 统计时能不能附带出图。
+        Public Sub New(tables As List(Of TableInfo), maxRows As Integer, skills As SkillCatalog, Optional charts As Boolean = False)
             _tables = tables
             _maxRows = Math.Max(1, maxRows)
             _skills = skills
+            _charts = charts
         End Sub
 
         ''' 本轮有没有这个工具: 没有可查的表就没有表工具, 没有技能文件就没有 read_skill。
@@ -81,9 +83,7 @@ Namespace AI
                     {"limit", New JObject From {{"type", "integer"}, {"description", "最多返回几行, 默认 20"}}}},
                 "table"))
 
-            list.Add(Fn(AGGREGATE,
-                "分组统计: 计数、去重计数、合计、平均、最小、最大。不分组时对全部符合条件的行统计。",
-                New JObject From {
+            Dim aggProps = New JObject From {
                     {"table", tableProp},
                     {"group_by", New JObject From {{"type", "array"}, {"description", "分组列, 最多 3 个"},
                         {"items", New JObject From {{"type", "object"}, {"properties", New JObject From {
@@ -98,8 +98,12 @@ Namespace AI
                     {"order_by", New JObject From {{"type", "object"}, {"description", "排序"}, {"properties", New JObject From {
                         {"by", New JObject From {{"type", "string"}, {"description", "分组列名, 或统计项如 sum(金额)、count"}}},
                         {"desc", New JObject From {{"type", "boolean"}}}}}}},
-                    {"limit", New JObject From {{"type", "integer"}, {"description", "最多返回几组, 默认 50"}}}},
-                "table"))
+                    {"limit", New JObject From {{"type", "integer"}, {"description", "最多返回几组, 默认 50。出图时图表显示全部组; 只想画前几名时才给"}}}}
+            If _charts Then aggProps("chart") = ChartBuilder.Schema()
+            list.Add(Fn(AGGREGATE,
+                "分组统计: 计数、去重计数、合计、平均、最小、最大。不分组时对全部符合条件的行统计。" &
+                If(_charts, "结果适合看图时附上 chart, 统计完直接出图。", ""),
+                aggProps, "table"))
             Return list
         End Function
 
@@ -147,7 +151,7 @@ Namespace AI
                 Case QUERY
                     Return New QueryEngine(t).Query(args, _maxRows)
                 Case AGGREGATE
-                    Return New QueryEngine(t).Aggregate(args, Math.Max(_maxRows, 200))
+                    Return New QueryEngine(t).Aggregate(args, Math.Max(_maxRows, 200), _charts)
                 Case Else
                     Throw New ToolArgumentException("没有工具 " & name)
             End Select
