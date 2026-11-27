@@ -31,6 +31,8 @@ Namespace AI
         ' 等用户点确认的工具调用、可以在狐表中打开的工具结果, 按工具 id
         Private ReadOnly _pending As New Dictionary(Of String, PendingConfirm)
         Private ReadOnly _opens As New Dictionary(Of String, OpenTarget)
+        ' 这段对话里查出的、可以画图的结果 (make_chart、表格卡片上的 "画图"); 新对话、换人时清空
+        Private ReadOnly _results As New ResultStore()
 
         Public Sub New(ai As ProAI, outbox As Outbox)
             _ai = ai
@@ -135,6 +137,7 @@ Namespace AI
                 Case "attach" : Attach(CStr(msg("name")), CStr(msg("kind")), CStr(msg("data")))
                 Case "detach" : Detach(CStr(msg("id")))
                 Case "voice" : Transcribe(CStr(msg("id")), CStr(msg("data")))
+                Case "chart" : DrawChart(CStr(msg("id")))
             End Select
         End Sub
 
@@ -164,6 +167,7 @@ Namespace AI
             _files.Clear()
             _draft.Clear()
             _opens.Clear()
+            _results.Clear()
             _outbox.Clear()
             _outbox.Enqueue(BuildSnapshot())
         End Sub
@@ -179,6 +183,13 @@ Namespace AI
         Public ReadOnly Property Files As AttachmentStore
             Get
                 Return _files
+            End Get
+        End Property
+
+        ''' 这段对话里查出的、可以画图的结果 (自测用)。
+        Public ReadOnly Property Results As ResultStore
+            Get
+                Return _results
             End Get
         End Property
 
@@ -423,6 +434,73 @@ Namespace AI
         End Function
 
         '==============================================================
+        ' 画图: 查出的结果留一份, 模型 (make_chart) 和用户 (表格卡片上的 "画图") 都能拿来画
+        '==============================================================
+
+        ''' 工具结果里有表格时登记下来: 给模型一个 result_id, 表格卡片上出现 "画图"。不能出图时不登记。tool 为 Nothing 时只登记 (自测用)。
+        Friend Function Register(outcome As ToolOutcome, Optional tool As JObject = Nothing) As String
+            If outcome Is Nothing OrElse outcome.Source Is Nothing OrElse Not _ai.AllowCharts Then Return Nothing
+            Dim id = _results.Add(outcome.Source)
+            outcome.Result("result_id") = id
+            If tool IsNot Nothing Then
+                tool("result") = id
+                If outcome.Chart Is Nothing AndAlso ChartBuilder.Chartable(outcome.Source) Then tool("chartable") = True
+            End If
+            Return id
+        End Function
+
+        ''' 用户在表格卡片上点了 "画图": 按数据形状选一种图, 显示在这个工具结果下面。画不了时提示原因。在界面线程上调用。
+        Public Function DrawChart(toolId As String) As String
+            Dim problem = DrawChartCore(toolId)
+            If problem IsNot Nothing Then
+                SyncLock _lock
+                    Notice(problem)
+                End SyncLock
+            End If
+            Return problem
+        End Function
+
+        Private Function DrawChartCore(toolId As String) As String
+            If Not _ai.AllowCharts Then Return "当前不支持出图。"
+            Dim who = _ai.CurrentWho()
+            Dim messageId As String = Nothing
+            Dim tool As JObject = Nothing
+            SyncLock _lock
+                ' 换了人: 上一个人查出的结果不能再画, 对话一并清掉
+                If _owner IsNot Nothing AndAlso _owner <> who.Key Then
+                    ClearLocked()
+                    Return "已换了用户, 之前查出的结果不能再画图, 请重新提问。"
+                End If
+                For Each m In _messages
+                    Dim tools = TryCast(m("tools"), JArray)
+                    If tools Is Nothing Then Continue For
+                    tool = tools.OfType(Of JObject)().FirstOrDefault(Function(t) CStr(t("id")) = toolId)
+                    If tool IsNot Nothing Then
+                        messageId = CStr(m("id"))
+                        Exit For
+                    End If
+                Next
+            End SyncLock
+            Dim src = If(tool Is Nothing, Nothing, _results.Find(CStr(tool("result"))))
+            If src Is Nothing Then Return "这个结果已经不能画图了 (太早或已清空), 请重新查询。"
+            Dim c As ChartOutcome
+            Try
+                ' 复核: 结果来自的表、列、业务工具, 这个人现在还能不能用
+                _ai.ChartAccessFor(who).Check(src)
+                c = ChartBuilder.Auto(src)
+            Catch ex As ToolArgumentException
+                Return "没能画图: " & ex.Message
+            End Try
+            If c.Failed Then Return "没能画图: " & c.Reason
+            SyncLock _lock
+                tool("chart") = c.Chart
+                tool.Remove("chartable")
+                _outbox.Enqueue(New JObject From {{"type", "tool"}, {"id", messageId}, {"tool", tool.DeepClone()}})
+            End SyncLock
+            Return Nothing
+        End Function
+
+        '==============================================================
         ' 一轮问答 (后台线程)
         '==============================================================
 
@@ -545,7 +623,7 @@ Namespace AI
                             End If
                         End SyncLock
                     End Sub,
-                    _files)
+                    _files, If(_ai.AllowCharts, _results, Nothing))
                 Dim outcome As ToolOutcome = Nothing
                 Dim failure As String = Nothing
                 Try
@@ -566,6 +644,7 @@ Namespace AI
                             If outcome.Table IsNot Nothing Then tool("table") = outcome.Table
                             ' 图表数据只给界面 (可多达 500 组), 给模型的是 outcome.Result 里截断后的结果
                             If outcome.Chart IsNot Nothing Then tool("chart") = outcome.Chart
+                            Register(outcome, tool)
                             If outcome.Open IsNot Nothing AndAlso outcome.Open.Usable Then
                                 _opens(CStr(tool("id"))) = outcome.Open
                                 tool("open") = True

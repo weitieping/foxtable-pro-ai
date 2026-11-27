@@ -47,7 +47,34 @@ export interface ResultTable {
 }
 
 /** 图表类型。与 FoxTablePro.AI/Data/ChartBuilder.vb 一致 */
-export type ChartType = "bar" | "bar_horizontal" | "bar_stacked" | "line" | "area" | "pie" | "donut" | "combo";
+export type ChartType =
+  | "bar"
+  | "bar_horizontal"
+  | "bar_stacked"
+  | "line"
+  | "area"
+  | "pie"
+  | "donut"
+  | "combo"
+  | "heatmap"
+  | "scatter"
+  | "funnel"
+  | "treemap"
+  | "radar"
+  | "waterfall"
+  | "pareto"
+  | "kpi";
+
+/** 指标卡的一项。完成率由 DLL 算好 (= 实际 / 目标) */
+export interface Kpi {
+  name: string;
+  value: number | null;
+  target?: number | null;
+  /** 目标值取自哪一项 */
+  targetName?: string;
+  /** 0~1 以上, 如 0.84 */
+  rate?: number;
+}
 
 export interface ChartSeries {
   name: string;
@@ -69,6 +96,10 @@ export interface ChartData {
   series: ChartSeries[];
   /** 拆成多条系列时, 数值是哪个统计项 */
   y?: string;
+  /** 拆成多条系列时, 按哪一列拆 (热力图的纵轴) */
+  group?: string;
+  /** 指标卡 */
+  kpis?: Kpi[];
   note?: string;
 }
 
@@ -87,6 +118,10 @@ export interface ToolCall {
   decision?: "approved" | "rejected" | "timeout";
   /** 可以在狐表中打开 */
   open?: boolean;
+  /** 这份结果的编号 (模型用 make_chart 引用) */
+  result?: string;
+  /** 表格可以画成图: 卡片上显示 "画图" */
+  chartable?: boolean;
 }
 
 export type MessageStatus = "streaming" | "done" | "error" | "cancelled";
@@ -131,6 +166,8 @@ export type WebMessage =
   | { type: "detach"; id: string }
   /** 录音 (16kHz 单声道 WAV 的 base64), 识别完回 transcript */
   | { type: "voice"; id: string; data: string }
+  /** 用户在表格卡片上点 "画图": DLL 选一种图, 以 tool 消息回来 */
+  | { type: "chart"; id: string }
   | { type: "openUrl"; url: string }
   | { type: "close" };
 

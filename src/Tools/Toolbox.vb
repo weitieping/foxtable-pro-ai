@@ -61,11 +61,13 @@ Namespace AI
         Private ReadOnly _cancelled As Func(Of Boolean)
         Private ReadOnly _onWrite As Action(Of JObject)
 
-        Public Sub New(confirm As Func(Of JObject, Boolean), cancelled As Func(Of Boolean), onWrite As Action(Of JObject), files As AttachmentStore)
+        Public Sub New(confirm As Func(Of JObject, Boolean), cancelled As Func(Of Boolean), onWrite As Action(Of JObject), files As AttachmentStore,
+                       Optional results As ResultStore = Nothing)
             _confirm = confirm
             _cancelled = cancelled
             _onWrite = onWrite
             Me.Files = files
+            Me.Results = results
         End Sub
 
         ''' 弹确认卡片并等用户点击 (后台线程上阻塞)。确认返回 True; 拒绝或本轮被取消返回 False。
@@ -86,6 +88,9 @@ Namespace AI
 
         ''' 这段对话里用户上传的文件。
         Public ReadOnly Files As AttachmentStore
+
+        ''' 这段对话里查出的、可以画图的结果 (make_chart 按 result_id 引用); 不能出图时为 Nothing。
+        Public ReadOnly Results As ResultStore
     End Class
 
     ''' "在狐表中打开": 哪张表的哪些行。有筛选表达式就用它 (用户在狐表里看到的也是条件), 否则按 _Identify 筛。

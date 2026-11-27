@@ -14,13 +14,17 @@ Namespace AI
         Private ReadOnly _maxRows As Integer
         Private ReadOnly _skills As SkillCatalog
         Private ReadOnly _charts As Boolean
+        Private ReadOnly _access As ChartAccess
 
-        ''' tables: 本轮开始时读出的放行表结构; skills: 本轮这个用户能看的技能库; charts: 统计时能不能附带出图。
-        Public Sub New(tables As List(Of TableInfo), maxRows As Integer, skills As SkillCatalog, Optional charts As Boolean = False)
+        ''' tables: 本轮开始时读出的放行表结构; skills: 本轮这个用户能看的技能库; charts: 统计时能不能附带出图;
+        ''' access: 指标卡引用别的结果 (target_result) 时复核权限用。
+        Public Sub New(tables As List(Of TableInfo), maxRows As Integer, skills As SkillCatalog, Optional charts As Boolean = False,
+                       Optional access As ChartAccess = Nothing)
             _tables = tables
             _maxRows = Math.Max(1, maxRows)
             _skills = skills
             _charts = charts
+            _access = access
         End Sub
 
         ''' 本轮有没有这个工具: 没有可查的表就没有表工具, 没有技能文件就没有 read_skill。
@@ -102,7 +106,8 @@ Namespace AI
             If _charts Then aggProps("chart") = ChartBuilder.Schema()
             list.Add(Fn(AGGREGATE,
                 "分组统计: 计数、去重计数、合计、平均、最小、最大。不分组时对全部符合条件的行统计。" &
-                If(_charts, "结果适合看图时附上 chart, 统计完直接出图。", ""),
+                If(_charts, "结果适合看图时附上 chart, 统计完直接出图。", "") &
+                "按日期的年/季/月/日/星期分组时, 首尾之间没有数据的时间会补上 (计数、合计为 0, 平均等为空)。",
                 aggProps, "table"))
             Return list
         End Function
@@ -137,11 +142,13 @@ Namespace AI
         End Function
 
         Public Function Execute(name As String, args As JObject, ctx As ToolContext) As ToolOutcome Implements IToolSet.Execute
-            Return UiThread.Run(Function() ExecuteOnUi(name, args))
+            Dim lookup As Func(Of String, ChartSource) = Nothing
+            If _access IsNot Nothing AndAlso ctx IsNot Nothing AndAlso ctx.Results IsNot Nothing Then lookup = Function(id) _access.Get(ctx.Results, id)
+            Return UiThread.Run(Function() ExecuteOnUi(name, args, lookup))
         End Function
 
         ''' 执行工具。只在界面线程上调用。参数错误抛 ToolArgumentException。
-        Private Function ExecuteOnUi(name As String, args As JObject) As ToolOutcome
+        Private Function ExecuteOnUi(name As String, args As JObject, lookup As Func(Of String, ChartSource)) As ToolOutcome
             If Not Owns(name) Then Throw New ToolArgumentException("没有名为 " & name & " 的工具。")
             If name = READ_SKILL Then Return ReadSkill(If(args Is Nothing, Nothing, CStr(args("path"))))
             Dim t = TableOf(args, throwIfMissing:=True)
@@ -151,7 +158,7 @@ Namespace AI
                 Case QUERY
                     Return New QueryEngine(t).Query(args, _maxRows)
                 Case AGGREGATE
-                    Return New QueryEngine(t).Aggregate(args, Math.Max(_maxRows, 200), _charts)
+                    Return New QueryEngine(t).Aggregate(args, Math.Max(_maxRows, 200), _charts, lookup)
                 Case Else
                     Throw New ToolArgumentException("没有工具 " & name)
             End Select

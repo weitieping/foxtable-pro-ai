@@ -85,7 +85,7 @@ Namespace AI
                 Dim r = UiThread.Run(Function() Shape(Invoke(t, vals, given, False), t.Spec.Title))
                 Dim res As New JObject From {{"result", r.Data}}
                 If r.Note IsNot Nothing Then res("note") = r.Note
-                Return New ToolOutcome(res, r.Summary, r.Table)
+                Return New ToolOutcome(res, r.Summary, r.Table) With {.Source = SourceOf(r, t)}
             End If
 
             Dim preview As JObject
@@ -122,7 +122,15 @@ Namespace AI
             ctx.Wrote(log)
             Dim ok As New JObject From {{"confirmed", True}, {"result", done.Data}, {"message", "用户已确认并执行了 " & t.Spec.Title & "。按 result 如实转述结果。"}}
             If done.Note IsNot Nothing Then ok("note") = done.Note
-            Return New ToolOutcome(ok, done.Summary, done.Table)
+            Return New ToolOutcome(ok, done.Summary, done.Table) With {.Source = SourceOf(done, t)}
+        End Function
+
+        ''' 函数返回的表格留一份, 之后可以画图; 记下来自哪个工具, 画图前复核这个用户还能不能用它。
+        Private Shared Function SourceOf(s As Shaped, t As CustomTool) As ChartSource
+            If s.Source Is Nothing Then Return Nothing
+            s.Source.Tool = t.ToolName
+            s.Source.Title = t.Spec.Title
+            Return s.Source
         End Function
 
         Private Shared Function Cancelled() As ToolOutcome
@@ -298,6 +306,8 @@ Namespace AI
             Public Text As String
             Public Summary As String = "完成"
             Public Note As String
+            ''' 表格的原始值 (画图用); 不是表格时为 Nothing。
+            Public Source As ChartSource
         End Class
 
         Private Function Shape(value As Object, title As String) As Shaped
@@ -337,6 +347,14 @@ Namespace AI
                 s.Data = o
                 s.Table = QueryEngine.UiTable(title, {"项目", "值"}, lines, lines.Count)
                 s.Summary = lines.Count & " 项"
+                ' 画图: 项目/值 两列 (指标卡按项目名取数)
+                Dim src As New ChartSource With {.ModelRows = lines.Count, .Total = lines.Count}
+                src.Columns.Add(New ChartColumn With {.Label = "项目", .Display = "项目"})
+                src.Columns.Add(New ChartColumn With {.Label = "值", .Display = "值"})
+                For Each k In DirectCast(value, IDictionary).Keys
+                    src.Rows.Add({Convert.ToString(k, CultureInfo.InvariantCulture), RawValue(DirectCast(value, IDictionary)(k))})
+                Next
+                s.Source = src
                 Return s
             End If
             If TypeOf value Is IEnumerable Then
@@ -365,16 +383,30 @@ Namespace AI
         Private Function Rows(items As List(Of Object), title As String) As Shaped
             Dim cols As New List(Of String)
             Dim recs As New List(Of List(Of KeyValuePair(Of String, Object)))
-            For Each it In items.Take(_maxRows)
+            ' 给模型的按 _maxRows 截断; 画图的最多留 500 行 (与图表的组数上限一致)
+            Dim keep = Math.Max(_maxRows, ChartBuilder.MAX_CATEGORIES)
+            For Each it In items.Take(keep)
                 Dim rec = RowValues(it)
                 For Each kv In rec
                     If Not cols.Contains(kv.Key) Then cols.Add(kv.Key)
                 Next
                 recs.Add(rec)
             Next
+            Dim src As New ChartSource With {.ModelRows = Math.Min(items.Count, _maxRows), .Total = items.Count}
+            For Each c In cols
+                src.Columns.Add(New ChartColumn With {.Label = c, .Display = c})
+            Next
+            For Each rec In recs
+                src.Rows.Add(cols.Select(Function(c) RawValue(rec.FirstOrDefault(Function(x) x.Key = c).Value)).ToArray())
+            Next
+            For Each c In src.Columns
+                Dim i = src.Columns.IndexOf(c)
+                Dim vals = src.Rows.Select(Function(r) r(i)).Where(Function(v) v IsNot Nothing).ToList()
+                c.IsTime = vals.Count > 0 AndAlso vals.All(Function(v) TypeOf v Is Date)
+            Next
             Dim data As New JArray()
             Dim lines As New JArray()
-            For Each rec In recs
+            For Each rec In recs.Take(_maxRows)
                 Dim o As New JObject()
                 Dim line As New JArray()
                 For Each c In cols
@@ -386,10 +418,18 @@ Namespace AI
                 data.Add(o)
                 lines.Add(line)
             Next
-            Dim s As New Shaped With {.Data = data, .Summary = items.Count & " 行"}
+            Dim s As New Shaped With {.Data = data, .Summary = items.Count & " 行", .Source = src}
             s.Table = QueryEngine.UiTable(title, cols, lines, items.Count)
             If items.Count > _maxRows Then s.Note = "共 " & items.Count & " 行, 只给了前 " & _maxRows & " 行。"
             Return s
+        End Function
+
+        ''' 画图用的原始值: 空值为 Nothing, 日期、数字原样, 其余 (含嵌套的列表) 为文字。
+        Private Shared Function RawValue(v As Object) As Object
+            If v Is Nothing OrElse TypeOf v Is DBNull Then Return Nothing
+            If TypeOf v Is Date OrElse TypeOf v Is Boolean OrElse ChartBuilder.IsNumber(v) Then Return v
+            If TypeOf v Is String Then Return v
+            Return DisplayValue(v).ToString(Newtonsoft.Json.Formatting.None)
         End Function
 
         Private Shared Function RowValues(it As Object) As List(Of KeyValuePair(Of String, Object))

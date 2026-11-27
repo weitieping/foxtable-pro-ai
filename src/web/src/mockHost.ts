@@ -2,6 +2,7 @@
 // 状态存 sessionStorage, 刷新页面后照样要快照还原, 与真实 DLL 的行为一致。
 // 问题里带"错误"回放失败, 带"慢"回放慢速输出 (测停止), 带"明细"回放查询明细, 带"新增"回放写入确认卡片,
 // 带"填"或附了图片回放填窗口, 带"图表"回放每种图表各一张 (?ask=图表 打开就看), 其余回放统计。
+// 统计、明细的表格卡片上有 "画图": 点了按表格里的数现画一张 (与 DLL 的 ChartBuilder.Auto 同一思路)。
 import type { Attachment, ChartData, Config, HostEvent, Message, ResultTable, ToolCall, WebMessage } from "./protocol";
 import type { Host } from "./host";
 
@@ -191,8 +192,8 @@ export function createMockHost(): Host {
         type: "tool",
         id: aid,
         tool: detail
-          ? { ...tool, status: "done", summary: "共 23 行, 显示前 8 行", table: detailTable }
-          : { ...tool, status: "done", summary: "13 行, 4 组", table: salesTable },
+          ? { ...tool, status: "done", summary: "共 23 行, 显示前 8 行", table: detailTable, result: "r" + st.seq, chartable: true }
+          : { ...tool, status: "done", summary: "13 行, 4 组", table: salesTable, result: "r" + st.seq, chartable: true },
       }),
     );
     t = stream(aid, "answer", answer, t + 300, 30, 4);
@@ -209,7 +210,15 @@ export function createMockHost(): Host {
       later(t, () => emit({ type: "tool", id: aid, tool: { ...tool, status: "done", summary: `${chart.categories.length} 组`, table, chart } }));
       t += 100;
     });
-    t = stream(aid, "answer", "以上是每种图表的样例：折线、面积 (365 天)、柱状、横向柱状、堆叠柱状、饼图 (30 个客户, 前 8 块之外合并为“其他”)、环形和组合图。", t + 200, 20, 6);
+    t = stream(
+      aid,
+      "answer",
+      "以上是每种图表的样例：折线 (3 月没有订单, 补为 0)、面积 (365 天, 可拖动缩放条)、柱状、横向柱状、堆叠柱状、饼图 (30 个客户, 前 8 块之外合并为“其他”)、环形、组合图、" +
+        "热力图 (月份 × 星期)、漏斗 (按状态流程)、帕累托 (二八分析)、指标卡 (实际与目标)、散点、矩形树图、雷达和瀑布图。",
+      t + 200,
+      20,
+      6,
+    );
     later(t + 100, () => finish(aid, { status: "done" }));
   }
 
@@ -312,6 +321,19 @@ export function createMockHost(): Host {
     finish(current, { status: "cancelled", tools });
   }
 
+  /** 表格卡片上的 "画图": 第一列做横轴, 数字列做数值 */
+  function drawChart(id: string) {
+    for (const m of st.messages) {
+      const tool = m.tools?.find((x) => x.id === id);
+      if (!tool?.table) continue;
+      const chart = autoChart(tool.table);
+      if (!chart) return notice("没能画图: 表格里没有可以画的数字列");
+      emit({ type: "tool", id: m.id, tool: { ...tool, chart, chartable: false } });
+      return;
+    }
+    notice("这个结果已经不能画图了");
+  }
+
   return {
     mock: true,
     post(msg: WebMessage) {
@@ -387,6 +409,9 @@ export function createMockHost(): Host {
         case "openUrl":
           window.open(msg.url, "_blank");
           break;
+        case "chart":
+          drawChart(msg.id);
+          break;
         case "close":
           notice("（模拟）已关闭侧栏");
           break;
@@ -451,7 +476,76 @@ function chartSamples(): [string, ChartData][] {
       categories: ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"],
       series: [{ name: "行数", data: [231, 248, 226, 259, 274, 162, 118] }],
     }],
+    // ---------- M2 ----------
+    ["统计 订单 · 每月销售额 (3 月没有订单)", {
+      type: "line", types: [...singles], title: "每月销售额 (缺的月份补 0)", x: "日期(月)", categories: months.slice(0, 6),
+      series: [{ name: "金额 合计", data: [182300, 164500, 0, 226400, 248900, 273100] }],
+    }],
+    ["统计 订单 · 每月按星期的订单数", {
+      type: "heatmap", types: [...pivots, "heatmap"], title: "行数 · 按 日期(月)、日期(星期)", x: "日期(月)", y: "行数", group: "日期(星期)",
+      categories: months, series: weekdays.map((name, k) => ({ name, data: months.map((_, i) => Math.max(0, Math.round(18 + 10 * Math.sin(i / 2 + k) + (k > 4 ? -9 : 4) + i))) })),
+    }],
+    ["统计 订单 · 各状态订单数", {
+      type: "funnel", types: [...singles, "funnel", "treemap", "pareto", "waterfall"], title: "订单各状态数量", x: "状态",
+      categories: ["下单", "付款", "发货", "签收", "完成"], series: [{ name: "行数", data: [1240, 1012, 876, 802, 745] }],
+    }],
+    ["统计 订单 · 各客户销售额 (二八分析)", {
+      type: "pareto", types: [...singles, "treemap", "pareto"], title: "哪些客户贡献了八成销售额", x: "客户", categories: customers,
+      series: [{ name: "金额 合计", data: customers.map((_, i) => Math.round(520000 / Math.pow(i + 1, 1.15))) }],
+    }],
+    ["画图 · 指标卡", {
+      type: "kpi", types: ["kpi"], title: "本月销售额完成情况", x: "指标", categories: [], series: [],
+      kpis: [{ name: "金额 合计", value: 420360.5, target: 500000, targetName: "本月目标", rate: 0.8407 }],
+    }],
+    ["统计 订单 · 今年概况", {
+      type: "kpi", types: ["kpi"], title: "今年概况", x: "指标", categories: [], series: [],
+      kpis: [{ name: "金额 合计", value: 3130700 }, { name: "行数", value: 1581 }, { name: "客户编号 不同值个数", value: 286 }],
+    }],
+    ["统计 订单 · 各客户单数和金额", {
+      type: "scatter", types: ["combo", "scatter", "bar", "bar_horizontal", "line"], title: "金额 合计 与 行数", x: "客户", categories: customers,
+      series: [
+        { name: "行数", data: customers.map((_, i) => 4 + ((i * 7) % 23) + (i % 3)) },
+        { name: "金额 合计", data: customers.map((_, i) => Math.round((4 + ((i * 7) % 23) + (i % 3)) * (2600 + ((i * 37) % 9) * 300))) },
+      ],
+    }],
+    ["统计 订单 · 各类别销售额构成", {
+      type: "treemap", types: [...singles, "funnel", "treemap", "pareto"], title: "各产品类别销售额构成", x: "产品类别", categories: ["家电", "数码", "服装", "家居", "食品", "母婴", "图书"],
+      series: [{ name: "金额 合计", data: [1186500, 902300, 534800, 318900, 147600, 96200, 41800] }],
+    }],
+    ["统计 订单 · 各类别两年对比", {
+      type: "radar", types: [...pivots, "radar", "heatmap"], title: "金额 合计 · 按 产品类别、日期(年)", x: "产品类别", y: "金额 合计", group: "日期(年)",
+      categories: ["家电", "数码", "服装", "家居", "食品", "母婴"],
+      series: [
+        { name: "2025", data: [980000, 840000, 560000, 290000, 160000, 70000] },
+        { name: "2026", data: [1186500, 902300, 534800, 318900, 147600, 96200] },
+      ],
+    }],
+    ["查询 库存流水 · 本月库存变化", {
+      type: "waterfall", types: ["bar", "bar_horizontal", "line", "area", "waterfall", "radar"], title: "本月库存变化", x: "项目",
+      categories: ["期初库存", "采购入库", "销售出库", "退货入库", "盘亏"], series: [{ name: "数量", data: [1200, 800, -950, 60, -35] }],
+    }],
   ];
+}
+
+const weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"];
+const pivots = ["line", "bar", "bar_stacked", "bar_horizontal", "area"] as const;
+
+/** 表格 → 图: 第一列横轴, 数字列数值; 两个数字列默认组合图 */
+function autoChart(t: ResultTable): ChartData | null {
+  const nums = t.columns
+    .map((name, j) => ({ name, j }))
+    .filter(({ j }) => j > 0 && t.rows.some((r) => typeof r[j] === "number") && t.rows.every((r) => r[j] === null || typeof r[j] === "number"));
+  if (nums.length === 0 || t.rows.length < 2) return null;
+  const categories = t.rows.map((r) => String(r[0]));
+  const ys = nums.slice(0, nums.length === 2 ? 2 : 1);
+  const series = ys.map(({ name, j }, i) => ({ name, data: t.rows.map((r) => r[j] as number | null), ...(ys.length === 2 && i === 1 ? { axis: 1 as const } : {}) }));
+  const multi = series.length > 1;
+  const nonNeg = series[0].data.every((v) => v === null || v >= 0);
+  const types: ChartData["types"] = multi
+    ? ["combo", "scatter", "bar", "bar_horizontal", "line"]
+    : ["bar", "bar_horizontal", "line", "area", ...(nonNeg ? (["pie", "donut", "funnel", "treemap", "pareto"] as const) : []), "waterfall"];
+  const type = multi ? "combo" : categories.length > 8 ? "bar_horizontal" : "bar";
+  return { type, types, title: ys.map((y) => y.name).join("、") + " · 按 " + t.columns[0], x: t.columns[0], categories, series };
 }
 
 /** 工具卡片上的结果表格 (与图表同一份数) */

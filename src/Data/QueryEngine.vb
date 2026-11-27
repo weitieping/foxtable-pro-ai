@@ -325,7 +325,14 @@ Namespace AI
             If _info.PartiallyLoaded Then res("partial") = "只针对已加载的行。"
 
             Dim ui = UiTable(_info.Display, cols.Select(Function(c) c.Display), data, rows.Count)
-            Return New ToolOutcome(res, If(rows.Count = picked.Count, rows.Count & " 行", "共 " & rows.Count & " 行, 显示前 " & picked.Count & " 行"), ui) With {.Open = OpenOf(rows, args("where"))}
+            ' 留一份查出的行, 之后可以画图 (make_chart、表格卡片上的 "画图"): 只有这几列、这几行
+            Dim src As New ChartSource With {
+                .Title = "查询 " & _info.Display, .Table = _info.Name, .ModelRows = picked.Count, .Total = rows.Count,
+                .ExplicitOrder = orderArg IsNot Nothing AndAlso orderArg.Type <> JTokenType.Null, .PartialRows = _info.PartiallyLoaded}
+            src.Columns.AddRange(cols.Select(Function(c) ChartColumnOf(c)))
+            src.Rows = picked.Select(Function(r) cols.Select(Function(c) Cell(r, c)).ToArray()).ToList()
+            Return New ToolOutcome(res, If(rows.Count = picked.Count, rows.Count & " 行", "共 " & rows.Count & " 行, 显示前 " & picked.Count & " 行"), ui) With {
+                .Open = OpenOf(rows, args("where")), .Source = src}
         End Function
 
         '==============================================================
@@ -391,7 +398,7 @@ Namespace AI
             {"year", "年"}, {"quarter", "季度"}, {"month", "月"}, {"day", "日"}, {"weekday", "星期"}}
 
         ''' 分组统计。charts: 能不能出图 (开发者没关掉图表); 能出图时按 args("chart") 画图, 图表数据与给模型的分开。
-        Public Function Aggregate(args As JObject, maxGroups As Integer, Optional charts As Boolean = False) As ToolOutcome
+        Public Function Aggregate(args As JObject, maxGroups As Integer, Optional charts As Boolean = False, Optional lookup As Func(Of String, ChartSource) = Nothing) As ToolOutcome
             ' 分组
             Dim keys As New List(Of GroupKey)
             Dim gb = args("group_by")
@@ -449,6 +456,7 @@ Namespace AI
                 Next
                 result.Add(line.ToArray())
             Next
+            Dim filled = FillGaps(keys, metrics, result)
 
             ' 排序: order_by.by 写分组列或统计项 (如 "sum(金额)"); 默认按分组列升序
             Dim labels = keys.Select(Function(k) k.Label).Concat(metrics.Select(Function(m) m.Label)).ToList()
@@ -492,6 +500,7 @@ Namespace AI
                 res("totals") = totals
             End If
             If result.Count > picked.Count Then res("note") = "共 " & result.Count & " 组, 只返回了前 " & picked.Count & " 组。"
+            If filled > 0 Then res("filled") = "补上了 " & filled & " 组没有数据的时间 (计数、合计为 0, 平均、最小、最大为空), 时间是连续的。"
             If _info.PartiallyLoaded Then res("partial") = "只针对已加载的行。"
 
             Dim display = keys.Select(Function(k) k.Column.Display & If(k.Part = "", "", "(" & PartNames(k.Part) & ")")).
@@ -499,16 +508,24 @@ Namespace AI
             Dim summary = If(keys.Count = 0, "统计了 " & rows.Count & " 行", rows.Count & " 行, " & result.Count & " 组")
             Dim outcome = New ToolOutcome(res, summary, UiTable(_info.Display, display, data, result.Count)) With {.Open = OpenOf(rows, args("where"))}
 
-            ' 出图: 只用这次统计的结果。模型指定了 limit (如前 10 名) 就只画这几组, 否则画全部 (最多 500 组)
+            ' 留一份统计结果, 出图和之后换图 (make_chart) 都只用它。模型指定了 limit (如前 10 名) 就只画这几组, 否则画全部 (最多 500 组)
+            Dim explicitLimit = args("limit") IsNot Nothing AndAlso args("limit").Type <> JTokenType.Null
+            Dim kept = If(explicitLimit, picked, result)
+            Dim src As New ChartSource With {
+                .Title = "统计 " & _info.Display, .Table = _info.Name, .ModelRows = picked.Count,
+                .Total = If(kept.Count > ChartBuilder.MAX_SOURCE_ROWS, result.Count, kept.Count),
+                .ExplicitOrder = ob IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(CStr(ob("by"))),
+                .PartialRows = _info.PartiallyLoaded}
+            src.Columns.AddRange(keys.Select(Function(k) ChartColumnOf(k)).Concat(metrics.Select(Function(m) ChartColumnOf(m, metrics))))
+            src.Rows = kept.Take(ChartBuilder.MAX_SOURCE_ROWS).ToList()
+            outcome.Source = src
+
             Dim chartArg = args("chart")
             If chartArg IsNot Nothing AndAlso chartArg.Type <> JTokenType.Null Then
                 If Not charts Then
                     res("chart_error") = "当前不支持出图, 用表格和文字回答。"
                 Else
-                    Dim cols = keys.Select(Function(k) ChartColumnOf(k)).Concat(metrics.Select(Function(m) ChartColumnOf(m, metrics))).ToList()
-                    Dim explicitLimit = args("limit") IsNot Nothing AndAlso args("limit").Type <> JTokenType.Null
-                    Dim explicitOrder = ob IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(CStr(ob("by")))
-                    Dim c = ChartBuilder.Build(chartArg, cols, If(explicitLimit, picked, result), picked.Count, explicitOrder, _info.PartiallyLoaded)
+                    Dim c = ChartBuilder.Build(chartArg, src, lookup)
                     If c.Failed Then
                         res("chart_error") = c.Message
                     Else
@@ -520,16 +537,119 @@ Namespace AI
             Return outcome
         End Function
 
+        '==============================================================
+        ' 补齐时间
+        '==============================================================
+
+        ''' 补齐后最多多少组; 超了就不补。
+        Private Const MAX_FILLED_ROWS As Integer = 20000
+        ''' 一个时间分组最多补成多少个连续的时间 (如 1000 天)。
+        Private Const MAX_TIME_SPAN As Integer = 1000
+
+        ''' 按年、季、月、日 (或星期) 分组时, 补上首尾之间没有数据的时间, 折线不会跳过空月份。
+        ''' 计数、合计补 0; 平均、最小、最大留空。按两列分组时, 对另一列的每个值都补。返回补了几组。
+        Private Shared Function FillGaps(keys As List(Of GroupKey), metrics As List(Of Metric), result As List(Of Object())) As Integer
+            Dim added = 0
+            For ki = 0 To keys.Count - 1
+                Dim k = keys(ki)
+                If k.Column.Kind <> ColumnKind.Date OrElse Not PartNames.ContainsKey(k.Part) Then Continue For
+                Dim idx = ki
+                Dim present = result.Select(Function(r) r(idx)).Where(Function(v) v IsNot Nothing).ToList()
+                If present.Count = 0 Then Continue For
+                Dim span = TimeRange(k.Part, present)
+                If span Is Nothing OrElse span.Count <= present.Distinct().Count() Then Continue For
+                Dim others = result.Select(Function(r) New CompositeKey(r.Take(keys.Count).Where(Function(v, j) j <> idx).ToArray())).Distinct().ToList()
+                If others.Count * span.Count > MAX_FILLED_ROWS Then Continue For
+                Dim have As New HashSet(Of CompositeKey)(result.Select(Function(r) New CompositeKey(r.Take(keys.Count).ToArray())))
+                For Each o In others
+                    For Each t In span
+                        Dim kv = o.Values.ToList()
+                        kv.Insert(idx, t)
+                        If Not have.Add(New CompositeKey(kv.ToArray())) Then Continue For
+                        result.Add(kv.Concat(metrics.Select(Function(m) EmptyValue(m))).ToArray())
+                        added += 1
+                    Next
+                Next
+            Next
+            Return added
+        End Function
+
+        ''' 首尾之间的全部时间 (与 GroupKey.KeyOf 的值同一形式); 太长或认不出时为 Nothing。
+        Private Shared Function TimeRange(part As String, present As List(Of Object)) As List(Of Object)
+            If part = "weekday" Then Return Enumerable.Range(0, 7).Select(Function(i) CObj(New WeekdayKey(CType((i + 1) Mod 7, DayOfWeek)))).ToList()
+            If part = "day" Then
+                Dim ds = present.OfType(Of Date)().ToList()
+                If ds.Count <> present.Count Then Return Nothing
+                Dim first = ds.Min(), last = ds.Max()
+                Dim n = CInt((last - first).TotalDays)
+                If n >= MAX_TIME_SPAN Then Return Nothing
+                Return Enumerable.Range(0, n + 1).Select(Function(i) CObj(first.AddDays(i))).ToList()
+            End If
+            ' 年、季、月是文字 (2026、2026-Q1、2026-03): 换成序号再换回来
+            Dim nums As New List(Of Integer)
+            For Each v In present
+                Dim s = TryCast(v, String)
+                Dim n As Integer
+                If s Is Nothing Then Return Nothing
+                Select Case part
+                    Case "year"
+                        If Not Integer.TryParse(s, n) Then Return Nothing
+                    Case "quarter"
+                        Dim y, q As Integer
+                        If s.Length <> 7 OrElse Not Integer.TryParse(s.Substring(0, 4), y) OrElse Not Integer.TryParse(s.Substring(6), q) Then Return Nothing
+                        n = y * 4 + q - 1
+                    Case Else
+                        Dim y, m As Integer
+                        If s.Length <> 7 OrElse Not Integer.TryParse(s.Substring(0, 4), y) OrElse Not Integer.TryParse(s.Substring(5), m) Then Return Nothing
+                        n = y * 12 + m - 1
+                End Select
+                nums.Add(n)
+            Next
+            Dim lo = nums.Min(), hi = nums.Max()
+            If hi - lo >= MAX_TIME_SPAN Then Return Nothing
+            Return Enumerable.Range(lo, hi - lo + 1).Select(Function(i) CObj(
+                If(part = "year", i.ToString("0000"),
+                If(part = "quarter", (i \ 4).ToString("0000") & "-Q" & (i Mod 4 + 1),
+                                     (i \ 12).ToString("0000") & "-" & (i Mod 12 + 1).ToString("00"))))).ToList()
+        End Function
+
+        ''' 没有数据的那一组: 计数、合计为 0, 其余为空。
+        Private Shared Function EmptyValue(m As Metric) As Object
+            Select Case m.Func
+                Case "count", "count_distinct" : Return 0
+                Case "sum" : Return 0D
+                Case Else : Return Nothing
+            End Select
+        End Function
+
+        '==============================================================
+        ' 出图用的列
+        '==============================================================
+
+        Private Shared Function OptionsOf(c As ColumnInfo) As String()
+            If String.IsNullOrWhiteSpace(c.ComboList) Then Return Nothing
+            Dim items = c.ComboList.Split({"|"c}, StringSplitOptions.RemoveEmptyEntries).Select(Function(s) s.Trim()).Where(Function(s) s <> "").ToArray()
+            Return If(items.Length = 0, Nothing, items)
+        End Function
+
+        ''' 明细的一列。
+        Private Shared Function ChartColumnOf(c As ColumnInfo) As ChartColumn
+            Dim cc As New ChartColumn With {.Label = c.Name, .Display = c.Display, .IsTime = c.Kind = ColumnKind.Date, .Options = OptionsOf(c), .Source = c.Name}
+            If Not String.IsNullOrEmpty(c.Caption) Then cc.Aliases.Add(c.Caption)
+            Return cc
+        End Function
+
         Private Shared Function ChartColumnOf(k As GroupKey) As ChartColumn
             Dim c As New ChartColumn With {.Label = k.Label, .Display = k.Column.Display & If(k.Part = "", "", "(" & PartNames(k.Part) & ")"),
-                                           .IsKey = True, .IsTime = k.Column.Kind = ColumnKind.Date}
+                                           .IsKey = True, .IsTime = k.Column.Kind = ColumnKind.Date, .Source = k.Column.Name,
+                                           .Options = If(k.Part = "", OptionsOf(k.Column), Nothing)}
             c.Aliases.Add(k.Column.Name)
             If Not String.IsNullOrEmpty(k.Column.Caption) Then c.Aliases.Add(k.Column.Caption)
             Return c
         End Function
 
         Private Shared Function ChartColumnOf(m As Metric, all As List(Of Metric)) As ChartColumn
-            Dim c As New ChartColumn With {.Label = m.Label, .Display = MetricDisplay(m)}
+            Dim c As New ChartColumn With {.Label = m.Label, .Display = MetricDisplay(m), .Source = If(m.Column Is Nothing, Nothing, m.Column.Name)}
             ' 只有一项是这个函数、或只有一项用这一列时, 也认 "sum"、"金额" 这类简写
             If all.Where(Function(x) x.Func = m.Func).Count() = 1 Then c.Aliases.Add(m.Func)
             If m.Column IsNot Nothing Then
@@ -696,6 +816,8 @@ Namespace AI
         Public Property Open As OpenTarget
         ''' 给界面的图表 (只给界面, 不进模型的历史)。
         Public Property Chart As JObject
+        ''' 可以画图的结果: 登记后给模型一个 result_id, 之后 make_chart 可以引用。
+        Public Property Source As ChartSource
 
         Public Sub New(result As JObject, summary As String, Optional table As JObject = Nothing)
             Me.Result = result

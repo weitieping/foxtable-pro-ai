@@ -15,7 +15,7 @@ import {
 import { readAttachment } from "./files";
 import { ChartCard } from "./Chart";
 import { useVoice } from "./voice";
-import { IconArrowUp, IconCheck, IconClose, IconMic, IconNewChat, IconPaperclip, IconSheet, IconSparkle } from "./icons";
+import { IconArrowUp, IconChart, IconCheck, IconClose, IconMic, IconNewChat, IconPaperclip, IconSheet, IconSparkle } from "./icons";
 
 declare global {
   interface Window {
@@ -322,11 +322,37 @@ function ToolLine({ t, charts, theme }: { t: ToolCall; charts: boolean; theme: s
           {t.summary && <span className="tool-summary">{t.summary}</span>}
           {hasTable && <span className={"chev" + (open ? " down" : "")}>›</span>}
         </button>
+        {charts && t.chartable && !t.chart && t.status === "done" && <DrawButton id={t.id} />}
         {t.open && t.status === "done" && <OpenButton id={t.id} />}
       </div>
       {open && t.table && <TableView table={t.table} />}
       {charts && t.chart && t.status === "done" && <ChartCard chart={t.chart} theme={theme} renderTable={(tbl) => <TableView table={tbl} />} />}
     </div>
+  );
+}
+
+/** 模型没出图时, 用户自己把表格画成图 (DLL 按数据形状选一种, 之后可以切换) */
+function DrawButton({ id }: { id: string }) {
+  const [sent, setSent] = useState(false);
+  // 画不了时 DLL 会给提示, 过一会儿允许再点
+  useEffect(() => {
+    if (!sent) return;
+    const t = window.setTimeout(() => setSent(false), 3000);
+    return () => clearTimeout(t);
+  }, [sent]);
+  return (
+    <button
+      className="open-btn draw-btn"
+      title="把这份结果画成图"
+      disabled={sent}
+      onClick={() => {
+        setSent(true);
+        host.post({ type: "chart", id });
+      }}
+    >
+      <IconChart />
+      画图
+    </button>
   );
 }
 

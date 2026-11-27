@@ -332,16 +332,26 @@ Public NotInheritable Class ProAI
         Dim skills = SkillLibrary.Scan(SkillsPath(), w)
         Dim sceneText = If(IncludeScene, Scene.Describe(w, HostWindowName(), tables), Nothing)
         Dim formTools As New FormTools(_forms.VisibleTo(w), _fillTracker)
-        Dim custom As New CustomTools(_functions.VisibleTo(w).Concat(_tools.VisibleTo(w)).ToList(), w, MaxRows)
+        Dim customList = _functions.VisibleTo(w).Concat(_tools.VisibleTo(w)).ToList()
+        Dim custom As New CustomTools(customList, w, MaxRows)
+        ' 画图只用本轮这个人能查的表、列和能用的业务工具查出的结果
+        Dim access = If(_allowCharts, New ChartAccess(tables, customList.Select(Function(t) t.ToolName)), Nothing)
         Dim box As New Toolbox()
-        box.Add(New ReadTools(tables, MaxRows, skills, _allowCharts))
+        box.Add(New ReadTools(tables, MaxRows, skills, _allowCharts, access))
         box.Add(New WriteTools(tables, files))
         box.Add(formTools)
         box.Add(New FileTools(files))
         box.Add(custom)
+        If tables.Count > 0 OrElse custom.HasAny Then box.Add(New ChartTools(access))
         Return New TurnSetup With {
             .Who = w, .Tools = box,
             .Prompt = BuildPrompt(tables, skills, sceneText, box.HasWrite, formTools.PromptSection(), files.All().Count > 0, custom)}
+    End Function
+
+    ''' 画图前复核用: 这个人现在能查的表、列和能用的业务工具。只在界面线程上调用。
+    Friend Function ChartAccessFor(w As Who) As ChartAccess
+        Dim customList = _functions.VisibleTo(w).Concat(_tools.VisibleTo(w))
+        Return New ChartAccess(SchemaReader.Read(_tables, w), customList.Select(Function(t) t.ToolName))
     End Function
 
     ''' 系统提示词。tables、skills: 本轮这个用户能看的表和技能; scene: 当前现场, 不带时为 Nothing;
@@ -395,11 +405,15 @@ Public NotInheritable Class ProAI
         sb.AppendLine("- 只回答这些表能回答的问题; 超出范围时说明你能查哪些数据。")
         sb.AppendLine("- 用中文回答, 先给结论再给明细。多行结果用 Markdown 表格, 行多时只列前若干行并说明总数。金额保留两位小数。")
         sb.AppendLine("- 工具结果里有 note 或 partial 时, 在回答中如实提示 (如只显示了部分、只统计了已加载的数据)。")
-        If tables.Count > 0 Then
+        If tables.Count > 0 OrElse hasCustom Then
             If _allowCharts Then
-                sb.AppendLine("- 统计结果适合看图 (趋势、比较、占比) 时, 在 aggregate 里附上 chart, 系统统计完直接出图; 不要自己画字符图或给图表代码。" &
-                              "出了图 (结果里有 chart) 就不必再列完整表格, 说结论和要点; 结果里有 chart_error 时按原因改正, 或者不出图直接回答。" &
-                              "用户要换图表类型时, 可以提示他在图表上点切换, 也可以用新的 chart 再统计一次。")
+                If tables.Count > 0 Then
+                    sb.AppendLine("- 统计结果适合看图 (趋势、比较、占比、分布、构成) 时, 在 aggregate 里附上 chart, 系统统计完直接出图; 不要自己画字符图或给图表代码。")
+                End If
+                sb.AppendLine("- 工具结果里的 result_id 是这份结果的编号。明细、业务工具返回的表格要画图, 或者用户要换一种图 (如 ""换成饼图""), 用 make_chart 引用 result_id, 不用重新查询。" &
+                              "只能引用这段对话里的结果; 找不到时说明需要先重新查询。")
+                sb.AppendLine("- 出了图 (结果里有 chart) 就不必再列完整表格, 说结论和要点; 结果里有 chart_error 或 make_chart 报错时按原因改正, 或者不出图直接回答。" &
+                              "用户在图表上也可以自己点切换类型。")
             Else
                 sb.AppendLine("- 当前不支持画图表。用户要图表时, 说明目前不支持, 用表格和文字回答。")
             End If
@@ -495,12 +509,13 @@ Public NotInheritable Class ProAI
                                        preview = p
                                        Return approve
                                    End Function, Function() False, Sub(e)
-                                                                   End Sub, _session.Files)
+                                                                   End Sub, _session.Files, If(_allowCharts, _session.Results, Nothing))
         Dim res As New JObject()
         Try
             Dim actual = {name, ToolSpec.ToolNameOf("fn_", name), ToolSpec.ToolNameOf("my_", name)}.FirstOrDefault(Function(n) setup.Tools.Owns(n))
             If actual Is Nothing Then Throw New ToolArgumentException("本轮没有工具 " & name)
             Dim o = setup.Tools.Execute(actual, If(String.IsNullOrWhiteSpace(argsJson), New JObject(), JObject.Parse(argsJson)), ctx)
+            _session.Register(o)
             res("result") = o.Result
             res("summary") = o.Summary
             If o.Chart IsNot Nothing Then res("chart") = o.Chart
@@ -521,6 +536,12 @@ Public NotInheritable Class ProAI
     <ComponentModel.EditorBrowsable(ComponentModel.EditorBrowsableState.Never)>
     Public Function Confirm(toolId As String, approved As Boolean) As Boolean
         Return _session.Decide(toolId, approved)
+    End Function
+
+    ''' 自测用: 代用户在表格卡片上点 "画图"。成功返回空串, 否则返回原因。
+    <ComponentModel.EditorBrowsable(ComponentModel.EditorBrowsableState.Never)>
+    Public Function DrawChart(toolId As String) As String
+        Return If(_session.DrawChart(toolId), "")
     End Function
 
     ''' 自测用: 代用户点 "在狐表中打开"。成功返回空串, 否则返回原因。
