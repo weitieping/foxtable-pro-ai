@@ -217,18 +217,34 @@ AddHandler ai.Logged, AddressOf 记AI日志   ' e.User、e.Question、e.Tools、
 - Node.js：构建时会自动在 `src/web/` 下运行 `npm install` 和 `npm run build`，把面板网页打成单个 HTML 嵌进 DLL；
 - 本机装有狐表 2026-11-16 或更新的版本。编译时直接引用狐表目录里的 `foxtable.exe`、`Newtonsoft.Json.dll` 和 WebView2 DLL，这些文件不会复制到输出目录。
 
-先指定狐表的安装目录，用环境变量或 MSBuild 参数都可以：
+先指定狐表的安装目录，三种方式任选其一：
 
-```powershell
-$env:FOXTABLE_DIR = "D:\foxtable"
-dotnet build -c Release
-# 或
-dotnet build -c Release -p:FoxtableDir=D:\foxtable
-```
+- **临时环境变量**（只对当前终端有效）：
+
+  ```powershell
+  $env:FOXTABLE_DIR = "D:\foxtable\Premium"
+  dotnet build -c Release
+  ```
+
+- **用户级环境变量**（设置一次，之后新开的终端和 Visual Studio 都认）：
+
+  ```powershell
+  setx FOXTABLE_DIR "D:\foxtable\Premium"
+  ```
+
+  `setx` 只对之后启动的进程生效，所以要完全关闭并重开 Visual Studio，已经开着的终端也要重开。
+
+- **MSBuild 参数**（只对这一次构建有效）：
+
+  ```powershell
+  dotnet build -c Release -p:FoxtableDir=D:\foxtable\Premium
+  ```
+
+`FOXTABLE_DIR` 要指向含 `foxtable.exe` 的那一层。狐表默认按版本装在子目录里（例如 `D:\foxtable\Premium`），这时不能只写 `D:\foxtable`。
 
 产物在仓库根目录的 `dist\`：`Foxtable.Pro.AI.dll` 和 `Foxtable.Pro.AI.xml`，编译目标是 x86、.NET Framework 4.7.2。只改了 VB 代码的话，可以加 `-p:SkipPanelWeb=true` 跳过网页打包。
 
-用 Visual Studio 打开 `FoxTablePro.AI.sln` 也一样，同样需要先设好 `FOXTABLE_DIR`。
+用 Visual Studio 打开 `FoxTablePro.AI.sln` 时同样需要 `FOXTABLE_DIR`：先按上面的方式设好用户级环境变量并重启 VS，再把配置切到 `Release`，生成解决方案，产物同样在 `dist\`。
 
 调试面板网页时，可以在 `src/web/` 下运行 `npm run dev`。没有狐表宿主时，网页会改用 `src/web/src/mockHost.ts` 里的模拟数据。
 
