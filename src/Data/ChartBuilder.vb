@@ -100,16 +100,12 @@ Namespace AI
             End Select
         End Function
 
-        ''' 选图规则 (写进工具说明)。
+        ''' 选图规则 (写进系统提示词, 见 ProAI.BuildPrompt)。
         Public Const RULES As String =
-            "选图: 随时间的变化趋势用 line 或 area; 各类别比大小、排名用 bar, 类别超过 8 个或名称较长用 bar_horizontal; " &
-            "各部分占总体的比例用 pie 或 donut (超过 8 块系统自动把其余合并为""其他"", 有负数时不能用); " &
-            "两个数量一起看 (如金额和单数) 用 combo, y 给两项; 按两列分组 (如月份×类别) 用 line 或 bar_stacked; " &
-            "两个维度交叉看分布 (如月份×星期) 用 heatmap; 两个数量之间的关系 (如各客户的单数和金额) 用 scatter, y 给两项; " &
-            "按流程各阶段的数量 (如各状态的订单数) 用 funnel, order 给流程顺序; 大小构成用 treemap; 几项指标的综合对比用 radar; " &
-            "逐项增减累计到合计用 waterfall; 哪些少数项贡献了八成 (二八分析) 用 pareto; " &
-            "一两个关键数字 (如实际与目标、完成率) 用 kpi, target 给目标值所在的列。" &
-            "不出图: 结果只有一个数字 (指标卡除外)、只有一两组, 或用户只要数字。一次回答最多出一张图。"
+            "选图: 趋势 line/area; 比较、排名 bar (类别多或名称长用 bar_horizontal); 占比 pie/donut; 两个数量一起看 combo (y 给两项); " &
+            "两列分组 line/bar_stacked; 两个维度的分布 heatmap; 两个数量的关系 scatter (y 给两项); 流程各阶段 funnel (order 给顺序); " &
+            "构成 treemap; 多项指标对比 radar; 逐项增减到合计 waterfall; 二八分析 pareto; 关键数字 kpi (target 给目标值的列)。" &
+            "只有一个数字、一两组或用户只要数字时不出图; 一次最多一张图。"
 
         ''' 出图参数 (统计时附带的 chart 和 make_chart 共用)。
         Public Shared Function SpecProperties() As JObject
@@ -134,7 +130,7 @@ Namespace AI
         Public Shared Function Schema() As JObject
             Return New JObject From {
                 {"type", "object"},
-                {"description", "出图要求。结果适合看图时附上, 统计完直接显示图表, 图上的数字由系统从统计结果里取。" & RULES},
+                {"description", "出图要求。统计完直接显示图表, 图上的数字由系统从统计结果里取。"},
                 {"properties", SpecProperties()},
                 {"required", New JArray("type")}}
         End Function
@@ -145,7 +141,7 @@ Namespace AI
             Try
                 Return Make(spec, src, lookup)
             Catch ex As ToolArgumentException
-                Return New ChartOutcome With {.Reason = ex.Message, .Message = "没有出图: " & ex.Message & " 结果照常给出; 要出图就改正 chart 后再调用一次。"}
+                Return New ChartOutcome With {.Reason = ex.Message, .Message = "没有出图: " & ex.Message & " 结果照常给出; 要出图就改正后用 make_chart 引用这份结果的 result_id 画, 不用重新统计。"}
             End Try
         End Function
 

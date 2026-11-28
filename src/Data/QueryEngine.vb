@@ -458,12 +458,16 @@ Namespace AI
             Next
             Dim filled = FillGaps(keys, metrics, result)
 
-            ' 排序: order_by.by 写分组列或统计项 (如 "sum(金额)"); 默认按分组列升序
+            ' 排序: order_by.by 写分组列或统计项 (如 "sum(金额)"); 默认按分组列升序。
+            ' 模型常把 query_rows 的写法搬过来: 数组取第一项, 字符串当 by, column 当 by 的别名; 不能悄悄忽略, 否则 "前 10 名" 会答错。
             Dim labels = keys.Select(Function(k) k.Label).Concat(metrics.Select(Function(m) m.Label)).ToList()
-            Dim ob = TryCast(args("order_by"), JObject)
+            Dim obArg = args("order_by")
+            If obArg IsNot Nothing AndAlso obArg.Type = JTokenType.Array Then obArg = If(DirectCast(obArg, JArray).Count > 0, obArg(0), Nothing)
+            If obArg IsNot Nothing AndAlso obArg.Type = JTokenType.String Then obArg = New JObject From {{"by", obArg}}
+            Dim ob = TryCast(obArg, JObject)
             Dim sortIdx = -1, desc = False
             If ob IsNot Nothing Then
-                Dim by = If(CStr(ob("by")), "").Trim()
+                Dim by = If(If(CStr(ob("by")), CStr(ob("column"))), "").Trim()
                 sortIdx = labels.FindIndex(Function(l) String.Equals(l, by, StringComparison.OrdinalIgnoreCase))
                 If sortIdx < 0 Then
                     Dim byFunc = metrics.Where(Function(m) String.Equals(m.Func, by, StringComparison.OrdinalIgnoreCase)).ToList()
@@ -514,7 +518,7 @@ Namespace AI
             Dim src As New ChartSource With {
                 .Title = "统计 " & _info.Display, .Table = _info.Name, .ModelRows = picked.Count,
                 .Total = If(kept.Count > ChartBuilder.MAX_SOURCE_ROWS, result.Count, kept.Count),
-                .ExplicitOrder = ob IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(CStr(ob("by"))),
+                .ExplicitOrder = ob IsNot Nothing AndAlso Not String.IsNullOrWhiteSpace(If(CStr(ob("by")), CStr(ob("column")))),
                 .PartialRows = _info.PartiallyLoaded}
             src.Columns.AddRange(keys.Select(Function(k) ChartColumnOf(k)).Concat(metrics.Select(Function(m) ChartColumnOf(m, metrics))))
             src.Rows = kept.Take(ChartBuilder.MAX_SOURCE_ROWS).ToList()

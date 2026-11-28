@@ -23,7 +23,7 @@ Namespace AI
 
         Public Sub New(tables As List(Of TableInfo), files As AttachmentStore)
             _tables = tables
-            _writable = tables.Where(Function(t) t.Writable AndAlso t.WritableColumns.Count > 0).ToList()
+            _writable = tables.Where(Function(t) t.CanWrite).ToList()
             _files = files
         End Sub
 
@@ -40,9 +40,9 @@ Namespace AI
         Public Function Definitions() As List(Of JObject) Implements IToolSet.Definitions
             Dim list As New List(Of JObject)
             If _writable.Count = 0 Then Return list
-            Dim tableProp = ReadTools.TableEnum(_writable)
+            Dim tableProp = ReadTools.TableParam("表名 (list_tables 里标了可写的)")
             Dim hasDetails = _writable.Any(Function(t) t.Details.Count > 0)
-            Dim rowItem As New JObject From {{"type", "object"}, {"description", "一行: {列名: 值}"}}
+            Dim rowItem As New JObject From {{"type", "object"}, {"description", "一行: {列名: 值}, 日期写 2026-03-05"}}
             If hasDetails Then
                 rowItem("properties") = New JObject From {
                     {DETAILS_KEY, New JObject From {{"type", "array"}, {"items", New JObject From {{"type", "object"}}},
@@ -50,15 +50,14 @@ Namespace AI
             End If
 
             list.Add(ReadTools.Fn(ADD,
-                "新增行并保存, 一次最多 " & MAX_ADD & " 行。执行前会给用户看预览并等用户确认。只给可写的列, 日期写 2026-03-05, 标了必填的列必须给。" &
-                If(hasDetails, "主表带明细时, 把明细行放在每行的 details 里一起提交。", ""),
+                "新增行并保存, 一次最多 " & MAX_ADD & " 行。执行前系统给用户看预览并等确认。",
                 New JObject From {
                     {"table", tableProp},
                     {"rows", New JObject From {{"type", "array"}, {"items", rowItem}, {"description", "要新增的行"}}}},
                 "table", "rows"))
 
             list.Add(ReadTools.Fn(UPDATE,
-                "修改符合条件的行并保存, 一次最多 " & MAX_UPDATE & " 行。执行前会给用户看改前改后的对比并等用户确认。条件不确定时先用 query_rows 看清要改哪些行。",
+                "修改符合条件的行并保存, 一次最多 " & MAX_UPDATE & " 行。执行前系统给用户看改前改后的对比并等确认。",
                 New JObject From {
                     {"table", tableProp},
                     {"where", ReadTools.WhereSchema("要修改哪些行, 条件须全部满足")},
@@ -67,8 +66,8 @@ Namespace AI
 
             If Owns(IMPORT) Then
                 list.Add(ReadTools.Fn(IMPORT,
-                    "把用户上传的表格文件导入到表里, 一次最多 " & MAX_IMPORT & " 行。你只需给出文件的列和表的列怎么对应, 由系统逐行转换, 不要自己逐行抄数据。" &
-                    "执行前会给用户看预览并等用户确认。转换失败的行跳过并在预览里列出。",
+                    "把用户上传的表格文件按列对应导入到表里, 一次最多 " & MAX_IMPORT & " 行, 由系统逐行转换。" &
+                    "执行前系统给用户看预览并等确认。转换失败的行跳过并在预览里列出。",
                     New JObject From {
                         {"file", New JObject From {{"type", "string"}, {"description", "文件编号, 如 f1"}}},
                         {"sheet", New JObject From {{"type", "string"}, {"description", "工作表名, 不填为第一个"}}},
@@ -127,9 +126,7 @@ Namespace AI
         End Function
 
         Private Function Find(name As String) As TableInfo
-            If name Is Nothing Then Return Nothing
-            Return If(_writable.FirstOrDefault(Function(x) String.Equals(x.Name, name.Trim(), StringComparison.OrdinalIgnoreCase)),
-                      _writable.FirstOrDefault(Function(x) String.Equals(x.Caption, name.Trim(), StringComparison.OrdinalIgnoreCase)))
+            Return SchemaReader.FindTable(_writable, name)
         End Function
 
         Private Function TableOf(args As JObject) As TableInfo

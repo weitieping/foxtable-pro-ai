@@ -55,7 +55,7 @@ Namespace AI
 
         ''' 按编号取结果并复核。取不到或不能用时抛 ToolArgumentException, 原因交给模型。
         Public Function [Get](results As ResultStore, id As String) As ChartSource
-            If String.IsNullOrWhiteSpace(id) Then Throw New ToolArgumentException("要给 result: 工具结果里的 result_id, 如 r2。")
+            If String.IsNullOrWhiteSpace(id) Then Throw New ToolArgumentException("要给 result_id: 工具结果里的 result_id, 如 r2。")
             Dim src = If(results Is Nothing, Nothing, results.Find(id))
             If src Is Nothing Then
                 Dim avail = If(results Is Nothing, "", results.Describe())
@@ -102,14 +102,14 @@ Namespace AI
             Dim list As New List(Of JObject)
             If Not Owns(MAKE_CHART) Then Return list
             Dim props = ChartBuilder.SpecProperties()
-            Dim all As New JObject From {{"result", New JObject From {{"type", "string"}, {"description", "要画的结果: 工具结果里的 result_id, 如 r2"}}}}
+            ' 参数和工具结果里的字段同名 (result_id), 模型不用换名字; 旧名 result 仍然认
+            Dim all As New JObject From {{"result_id", New JObject From {{"type", "string"}, {"description", "要画的结果, 如 r2"}}}}
             For Each p In props.Properties()
                 all.Add(p.Name, p.Value)
             Next
             list.Add(ReadTools.Fn(MAKE_CHART,
-                "用本次对话里已经查出的结果画图, 图上的数字由系统从那份结果里取。用于: 明细查询、业务工具返回的表格; " &
-                "用户要换一种图 (如 ""换成饼图"") 时直接引用原来的结果, 不用重新统计。统计时可以直接在 aggregate 里附上 chart, 不必再调它。" & ChartBuilder.RULES,
-                all, "result", "type"))
+                "用本次对话里已经查出的一份结果 (按 result_id) 画图, 图上的数字由系统从那份结果里取。",
+                all, "result_id", "type"))
             Return list
         End Function
 
@@ -121,9 +121,9 @@ Namespace AI
         Public Function Execute(name As String, args As JObject, ctx As ToolContext) As ToolOutcome Implements IToolSet.Execute
             If Not Owns(name) Then Throw New ToolArgumentException("当前不支持出图, 用表格和文字回答。")
             Dim results = If(ctx Is Nothing, Nothing, ctx.Results)
-            Dim src = _access.Get(results, CStr(args("result")))
+            Dim src = _access.Get(results, If(CStr(args("result_id")), CStr(args("result"))))
             Dim c = ChartBuilder.Make(args, src, Function(id) _access.Get(results, id))
-            Dim res As New JObject From {{"result", src.Id}, {"chart", c.Message}}
+            Dim res As New JObject From {{"result_id", src.Id}, {"chart", c.Message}}
             Return New ToolOutcome(res, ChartBuilder.TypeName(CStr(c.Chart("type"))) & " · " & src.Title) With {.Chart = c.Chart}
         End Function
     End Class

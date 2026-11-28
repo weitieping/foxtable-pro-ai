@@ -31,7 +31,7 @@ Namespace AI
     ''' 项目技能库: 工程目录下的 ai/ 目录, 格式同 Claude Code 的技能 (SKILL.md + frontmatter)。
     '''
     ''' - ai/SKILL.md: 系统概况、术语、红线, 正文每轮放进提示词。
-    ''' - 其余 .md: 有 description 的进技能目录, AI 按需用 read_skill 读; 没有的只能被引用后读。
+    ''' - 其余 .md: 有 description 的进技能目录 (AI 用 list_skills 查看), AI 按需用 read_skill 读; 没有的只能被引用后读。
     ''' - frontmatter 里 roles: 经理, 财务 表示只给这些角色看。
     ''' 只读 .md / .txt, 只读技能库目录里的文件。
     Friend Module SkillLibrary
@@ -182,15 +182,16 @@ Namespace AI
             Return If(after < 0, "", t.Substring(after + 1))
         End Function
 
-        ''' 提示词里的技能目录。
-        Public Function PromptSection(cat As SkillCatalog) As String
-            Dim sb As New StringBuilder()
+        ''' list_skills 的结果: 每个技能一行, 如 "销售/SKILL.md (销售): 销售额口径、退货处理"。
+        Public Function Listing(cat As SkillCatalog) As List(Of String)
+            Dim res As New List(Of String)
             For Each e In cat.Entries
-                sb.Append("- ").Append(e.Path)
+                Dim sb As New StringBuilder(e.Path)
                 If Not String.IsNullOrWhiteSpace(e.Name) Then sb.Append(" (").Append(e.Name.Trim()).Append(")")
-                sb.Append(": ").AppendLine(e.Description.Trim())
+                sb.Append(": ").Append(e.Description.Trim())
+                res.Add(sb.ToString())
             Next
-            Return sb.ToString()
+            Return res
         End Function
     End Module
 End Namespace

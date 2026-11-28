@@ -10,6 +10,7 @@ Namespace AI
     Friend NotInheritable Class FormTools
         Implements IToolSet
 
+        Public Const LIST_FORMS As String = "list_forms"
         Public Const FILL As String = "fill_form"
 
         Private ReadOnly _forms As List(Of FormAccess)
@@ -20,61 +21,42 @@ Namespace AI
             _tracker = tracker
         End Sub
 
+        ''' 这个用户有可填写的窗口。
+        Public ReadOnly Property HasAny As Boolean
+            Get
+                Return _forms.Count > 0
+            End Get
+        End Property
+
         Public Function Owns(name As String) As Boolean Implements IToolSet.Owns
-            Return name = FILL AndAlso _forms.Count > 0
+            Return (name = LIST_FORMS OrElse name = FILL) AndAlso _forms.Count > 0
         End Function
 
+        ''' 有哪些窗口、窗口有哪些字段都不放进系统提示词, 由模型用 list_forms、只给 form 的 fill_form 去查。
+        ''' form 参数也不列枚举, 给错时报错信息里列出可填写的窗口。
         Public Function Definitions() As List(Of JObject) Implements IToolSet.Definitions
             Dim list As New List(Of JObject)
             If _forms.Count = 0 Then Return list
+            list.Add(ReadTools.Fn(LIST_FORMS, "列出当前用户可以填写的录入窗口: 窗口名和说明。", New JObject()))
             list.Add(ReadTools.Fn(FILL,
-                "打开系统里的录入窗口, 把内容填进去 (不保存), 由用户核对后自己点窗口里的保存按钮。" &
-                "用户要把图片、文件里的单据录进系统, 而有对应的录入窗口时, 优先用它。只给 form 不给 values 时, 只打开窗口并返回有哪些字段。",
+                "打开系统里的录入窗口, 把内容填进去 (不保存), 由用户核对后自己点窗口里的保存按钮。只给 form 不给 values 时, 只打开窗口并返回有哪些字段。",
                 New JObject From {
-                    {"form", New JObject From {{"type", "string"}, {"enum", New JArray(_forms.Select(Function(f) f.Name).Cast(Of Object)().ToArray())}, {"description", "窗口名"}}},
-                    {"mode", New JObject From {{"type", "string"}, {"enum", New JArray("new", "current")}, {"description", "new: 新建一张单再填 (默认); current: 填到窗口当前这张单"}}},
-                    {"values", New JObject From {{"type", "object"}, {"description", "{字段名: 值}, 字段名见窗口的字段列表; 日期写 2026-03-05; 认不清的字段不要填"}}},
+                    {"form", New JObject From {{"type", "string"}, {"description", "窗口名 (list_forms 列出的)"}}},
+                    {"mode", New JObject From {{"type", "string"}, {"enum", New JArray("new", "current")}, {"description", "new: 新建一张单再填; current: 填到窗口当前这张单。不给时: 当前这张是本次对话新建、还没保存的单就接着填它, 否则新建"}}},
+                    {"values", New JObject From {{"type", "object"}, {"description", "{字段名: 值}, 字段名用只给 form 调用时返回的; 日期写 2026-03-05"}}},
                     {"details", New JObject From {{"type", "array"}, {"items", New JObject From {{"type", "object"}}}, {"description", "明细表格的行, 每项 {列名: 值} (窗口里有明细表格时)"}}}},
                 "form"))
             Return list
         End Function
 
         Public Function Label(name As String, args As JObject) As String Implements IToolSet.Label
-            Return "填写窗口 " & CStr(args("form"))
+            If name = LIST_FORMS Then Return "查看可填写的窗口"
+            Return "填写窗口 " & If(args Is Nothing, "", CStr(args("form")))
         End Function
 
-        ''' 提示词里的 "可填写的窗口" 一节。只在界面线程上调用。
-        ''' 狐表窗口打开后才有控件: 开着就现读, 没开着用上次读到的, 从没开过就请模型先查看字段。
-        Public Function PromptSection() As String
-            If _forms.Count = 0 Then Return ""
-            Dim sb As New StringBuilder()
-            For Each f In _forms
-                sb.Append("- ").Append(f.Name)
-                If f.Description <> "" Then sb.Append(": ").Append(f.Description)
-                sb.AppendLine()
-                Dim fields As String = Nothing
-                Try
-                    Dim layout = FormReader.Inspect(f.Name)
-                    If layout IsNot Nothing Then
-                        fields = Describe(layout)
-                        _tracker.Layouts(f.Name) = fields
-                    End If
-                Catch
-                End Try
-                If fields Is Nothing Then _tracker.Layouts.TryGetValue(f.Name, fields)
-                If fields Is Nothing Then fields = "  (字段要打开窗口后才知道: 先只给 form 调用 fill_form 查看字段, 再填)" & vbLf
-                sb.Append(fields)
-            Next
-            Return sb.ToString()
-        End Function
-
-        Private Shared Function Describe(layout As FormLayout) As String
-            Dim sb As New StringBuilder()
-            If layout.Fields.Count > 0 Then sb.Append("  字段: ").AppendLine(String.Join("; ", layout.Fields.Select(Function(x) x.Brief())))
-            If layout.Detail IsNot Nothing Then
-                sb.Append("  明细表格 (details): ").AppendLine(String.Join("; ", DetailColumns(layout).Select(Function(c) c.Brief())))
-            End If
-            Return sb.ToString()
+        ''' list_forms 的结果: 每个窗口一行, 如 "订单录入: 新建销售订单"。
+        Private Function Listing() As List(Of String)
+            Return _forms.Select(Function(f) If(f.Description <> "", f.Name & ": " & f.Description, f.Name)).ToList()
         End Function
 
         Private Shared Function DetailColumns(layout As FormLayout) As IEnumerable(Of ColumnInfo)
@@ -82,6 +64,10 @@ Namespace AI
         End Function
 
         Public Function Execute(name As String, args As JObject, ctx As ToolContext) As ToolOutcome Implements IToolSet.Execute
+            If name = LIST_FORMS Then
+                Dim lines = Listing()
+                Return New ToolOutcome(New JObject From {{"forms", New JArray(lines.Cast(Of Object)().ToArray())}}, lines.Count & " 个窗口")
+            End If
             Dim formName = CStr(args("form"))
             Dim f = _forms.FirstOrDefault(Function(x) String.Equals(x.Name, If(formName, "").Trim(), StringComparison.OrdinalIgnoreCase))
             If f Is Nothing Then Throw New ToolArgumentException(If(formName, "(未给)") & " 不是可填写的窗口。可填写的窗口: " & String.Join("、", _forms.Select(Function(x) x.Name)))
@@ -99,7 +85,6 @@ Namespace AI
             Dim form = FormReader.Open(formName)
             Dim layout = FormReader.Inspect(formName)
             If layout Is Nothing Then Throw New ToolArgumentException("窗口 " & formName & " 没能打开。")
-            _tracker.Layouts(formName) = Describe(layout)
             Dim values = TryCast(args("values"), JObject)
             Dim details = TryCast(args("details"), JArray)
             Dim fieldsJson = New JArray(layout.Fields.Select(Function(x) x.Brief()).Cast(Of Object)().ToArray())
@@ -118,12 +103,17 @@ Namespace AI
             Dim skipped As New List(Of String)
             Dim problems As New List(Of String)
             Dim newRows As New List(Of Object)
-            Dim mode = If(CStr(args("mode")), "new").Trim().ToLowerInvariant()
+            ' 不给 mode 时, 窗口当前是本次对话刚新建、还没保存的单就接着填它:
+            ' 填完用户说 "客户改成李四", 模型再调用时常不带 mode, 默认新建会多出一张单。
+            Dim mode = If(CStr(args("mode")), "").Trim().ToLowerInvariant()
             Dim dr As Object = Nothing
             If layout.BindTable IsNot Nothing Then
                 Dim tbl = DirectCast(Fx.Item(Fx.Global("Tables"), layout.BindTable), Foxtable.Table)
+                Dim cur = Fx.Get(tbl, "Current")
+                If mode <> "new" AndAlso mode <> "current" Then
+                    mode = If(cur IsNot Nothing AndAlso _tracker.IsPending(formName, Fx.Get(cur, "DataRow")), "current", "new")
+                End If
                 If mode = "current" Then
-                    Dim cur = Fx.Get(tbl, "Current")
                     If cur Is Nothing Then Throw New ToolArgumentException("窗口 " & formName & " 现在没有当前单据, 用 mode=new。")
                     dr = Fx.Get(cur, "DataRow")
                 Else
@@ -216,7 +206,8 @@ Namespace AI
             End If
             If problems.Count > 0 Then res("problems") = New JArray(problems.Cast(Of Object)().ToArray())
             res("message") = "已填入窗口「" & formName & "」, 还没有保存。请用户核对, 确认无误后点窗口里的保存按钮; 你不能替用户保存。" &
-                             If(skipped.Count > 0, "窗口里没有这些字段, 没填: " & String.Join("、", skipped) & "。要补填就用 mode=current, 别再新建一张。", "") &
+                             "接着改这张单就再调用 fill_form (不给 mode 会填到这张单上), 另录一张才用 mode=new。" &
+                             If(skipped.Count > 0, "窗口里没有这些字段, 没填: " & String.Join("、", skipped) & "。", "") &
                              If(problems.Count > 0, "有些字段没填成, 见 problems, 告诉用户手动补上。", "")
             Dim log As New JObject From {{"action", "fill_form"}, {"form", formName}, {"fields", filled.Count}}
             If layout.BindTable IsNot Nothing Then log("table") = layout.BindDataTable
@@ -400,9 +391,6 @@ Namespace AI
         Private ReadOnly _items As New List(Of Tuple(Of String, List(Of Object)))
         Private _timer As Windows.Forms.Timer
 
-        ''' 窗口打开过时读到的字段说明, 窗口关着时给提示词用。
-        Public ReadOnly Layouts As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
-
         ''' 在界面线程上调用。
         Public Sub Track(form As String, rows As List(Of Object))
             _items.Add(Tuple.Create(form, rows))
@@ -437,6 +425,23 @@ Namespace AI
             Next
             If _items.Count = 0 Then _timer.Stop()
         End Sub
+
+        ''' row 是不是在这个窗口里新建、还没保存的行。在界面线程上调用。
+        Public Function IsPending(form As String, row As Object) As Boolean
+            Dim target = BaseOf(row)
+            If target Is Nothing Then Return False
+            Return _items.Any(Function(e) String.Equals(e.Item1, form, StringComparison.OrdinalIgnoreCase) AndAlso
+                                          e.Item2.Any(Function(r) BaseOf(r) Is target AndAlso IsAdded(r)))
+        End Function
+
+        Private Shared Function BaseOf(r As Object) As DataRow
+            If r Is Nothing Then Return Nothing
+            Try
+                Return TryCast(Fx.Get(r, "BaseRow"), DataRow)
+            Catch
+                Return Nothing
+            End Try
+        End Function
 
         Private Shared Function IsAdded(r As Object) As Boolean
             Try

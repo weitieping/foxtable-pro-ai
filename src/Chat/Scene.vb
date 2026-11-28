@@ -49,17 +49,22 @@ Namespace AI
         End Function
     End Class
 
-    ''' 当前现场: 谁在问、面板在哪个窗口、当前表的当前行和选中行。每轮开始时在界面线程上读。
+    ''' 当前现场: 面板在哪个窗口、当前表的当前行和选中行。每轮开始时在界面线程上读。
     ''' 行数据只给这个用户放行的表和列。
+    ''' 现场随用户点选随时会变, 放在用户消息里而不放进系统提示词: 系统提示词不变, 模型服务的前缀缓存才能命中整段历史。
     Friend NotInheritable Class Scene
 
         Private Const MAX_SELECTED_ROWS As Integer = 10
 
-        Public Shared Function Describe(who As Who, windowName As String, tables As List(Of TableInfo)) As String
+        ''' 谁在问, 只给用户名 (放进系统提示词: 换人时对话会清空, 一段对话里不变)。
+        ''' 不给角色: 权限已经体现在能用的表、列、工具和技能里, 模型不需要知道角色。
+        Public Shared Function WhoText(who As Who) As String
+            Return If(who.Name = "", "(未登录)", who.Name)
+        End Function
+
+        ''' 面板所在窗口和用户正在看的表、行; 都没有时为空串。
+        Public Shared Function Describe(windowName As String, tables As List(Of TableInfo)) As String
             Dim sb As New StringBuilder()
-            sb.Append("- 用户: ").Append(If(who.Name = "", "(未登录)", who.Name))
-            If who.Roles.Count > 0 Then sb.Append(", 角色: ").Append(String.Join("、", who.Roles))
-            sb.AppendLine()
             If Not String.IsNullOrEmpty(windowName) Then sb.Append("- 面板所在窗口: ").AppendLine(windowName)
             Try
                 AppendCurrentTable(sb, tables)
@@ -131,6 +136,8 @@ Namespace AI
                 Else
                     s = v.ToString()
                 End If
+                ' 值是用户录的数据: 换行会打乱现场的格式, 尖括号可能拼出 </当前现场> 冒充用户的话
+                s = s.Replace(vbCrLf, " ").Replace(vbLf, " ").Replace(vbCr, " ").Replace("<", "‹").Replace(">", "›").Trim()
                 If s = "" Then Continue For
                 If s.Length > 60 Then s = s.Substring(0, 60) & "…"
                 parts.Add(c.Name & "=" & s)

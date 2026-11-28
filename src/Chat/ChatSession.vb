@@ -26,6 +26,8 @@ Namespace AI
         Private _owner As String
         ' 历史被裁剪过: 提示词里告诉模型更早的内容已省略
         Private _trimmed As Boolean
+        ' 历史里最近一次给模型的现场 (空串: 给过 "没有在看的表"); Nothing: 还没给过, 或给过的那轮已被裁掉
+        Private _lastScene As String
         ' 上传过的文件 (整段对话可用) 和还没发出去的附件
         Private ReadOnly _files As New AttachmentStore()
         Private ReadOnly _draft As New List(Of Attachment)
@@ -46,6 +48,8 @@ Namespace AI
             Public Question As String
             ''' 交给模型的用户消息: 文本, 或带图片的内容数组
             Public UserContent As Object
+            ''' 这轮附在用户消息里的现场; Nothing: 没附 (没变或不带现场)。这轮完成后记为最近一次给的现场
+            Public Scene As String
             Public Caller As LLMCaller
             Public Tools As Toolbox
             Public Prompt As String
@@ -164,6 +168,7 @@ Namespace AI
             _messages.Clear()
             _history = New JArray()
             _trimmed = False
+            _lastScene = Nothing
             _owner = Nothing
             _files.Clear()
             _draft.Clear()
@@ -285,7 +290,7 @@ Namespace AI
                 {"tools", New JArray()}, {"status", "streaming"}}
 
             Dim problem As String = Nothing
-            Dim turn As New Turn With {.Message = answer, .Question = text, .UserContent = UserContent(text, attachments)}
+            Dim turn As New Turn With {.Message = answer, .Question = text}
             Dim setup As TurnSetup = Nothing
             Try
                 If Not Llm.Available Then Throw New NotSupportedException("AI 面板需要狐表 2026-11-16 或更新的版本, 请先升级狐表。")
@@ -311,11 +316,15 @@ Namespace AI
                 If setup IsNot Nothing AndAlso _owner IsNot Nothing AndAlso _owner <> setup.Who.Key Then ClearLocked()
                 If setup IsNot Nothing Then _owner = setup.Who.Key
                 If problem Is Nothing Then
-                    Dim trimmed As Boolean
-                    Dim budget = Math.Max(2000, _ai.MaxContextChars - turn.Prompt.Length - text.Length)
-                    turn.History = HistoryTrimmer.Trim(_history, budget, trimmed)
+                    Dim trimmed, dropped As Boolean
+                    Dim budget = Math.Max(2000, _ai.MaxContextChars - turn.Prompt.Length - text.Length - If(setup.Scene, "").Length)
+                    turn.History = HistoryTrimmer.Trim(_history, budget, trimmed, dropped)
                     If trimmed Then _trimmed = True
-                    If _trimmed Then turn.Prompt &= vbLf & "注意: 更早的对话内容已省略。用户提到你看不到的前文时, 请他重新说明。" & vbLf
+                    ' 提示词以 "## 背景" 一节结尾, 补成其中一条
+                    If _trimmed Then turn.Prompt &= "- 更早的对话内容已省略; 用户提到你看不到的前文时, 请用户重新说明。" & vbLf
+                    ' 丢掉的轮次里可能有最近一次给的现场, 重新给一次
+                    If dropped Then _lastScene = Nothing
+                    turn.UserContent = UserContent(WithScene(text, setup.Scene, turn), attachments)
                 End If
                 _draft.Clear()
                 _messages.Add(user)
@@ -333,6 +342,16 @@ Namespace AI
             End SyncLock
             Task.Run(Function() RunTurnAsync(turn))
             Return True
+        End Function
+
+        ''' 现场和上次给模型的不同时, 附在问题前面 (在锁内调用)。scene: 本轮的现场, 不带现场时为 Nothing。
+        ''' 附过的现场留在历史里, 没变就不再重复; 系统提示词因此每轮不变, 前缀缓存能命中整段历史。
+        Private Function WithScene(text As String, scene As String, turn As Turn) As String
+            If scene Is Nothing Then Return text
+            If _lastScene Is Nothing AndAlso scene = "" Then Return text
+            If scene = _lastScene Then Return text
+            turn.Scene = scene
+            Return "<当前现场>" & vbLf & If(scene = "", "(没有在看的表)" & vbLf, scene) & "</当前现场>" & vbLf & vbLf & text
         End Function
 
         ''' 用户消息: 表格附上前几行; 有图片时用 OpenAI 的内容数组。
@@ -675,7 +694,10 @@ Namespace AI
             SyncLock _lock
                 If turn.Cancelled Then Return
                 _turn = Nothing
-                If history IsNot Nothing Then _history = history
+                If history IsNot Nothing Then
+                    _history = history
+                    If turn.Scene IsNot Nothing Then _lastScene = turn.Scene
+                End If
                 ' 以最终结果为准, 流式拼出来的只是过程
                 If result <> "" Then turn.Message("text") = result
                 If think <> "" Then turn.Message("think") = think
@@ -763,6 +785,8 @@ Namespace AI
         Public Who As Who
         Public Tools As Toolbox
         Public Prompt As String
+        ''' 当前现场 (附在用户消息里); 不带现场时为 Nothing, 带现场但没有可说的时为空串。
+        Public Scene As String
     End Class
 
     ''' 在狐表主界面里筛出某张表的若干行。只在界面线程上调用。

@@ -13,9 +13,14 @@ Namespace AI
         ''' 一张图片按多少字估算 (base64 本身不算)。
         Private Const IMAGE_CHARS As Integer = 1500
 
-        ''' 返回裁剪后的副本; 原历史不动。trimmed: 有没有省略或丢掉内容。
-        Public Function Trim(history As JArray, budget As Integer, ByRef trimmed As Boolean) As JArray
+        ''' 要丢整轮时, 一次丢到预算的这个比例以下。裁剪后的历史会成为下一轮的历史 (ChatSession.Complete),
+        ''' 留出余量后接下来几轮都不用再丢, 历史开头不变, 模型服务的前缀缓存能接着命中。
+        Private Const DROP_TO As Double = 0.7
+
+        ''' 返回裁剪后的副本; 原历史不动。trimmed: 有没有省略或丢掉内容; dropped: 有没有丢掉整轮。
+        Public Function Trim(history As JArray, budget As Integer, ByRef trimmed As Boolean, Optional ByRef dropped As Boolean = False) As JArray
             trimmed = False
+            dropped = False
             Dim turns = SplitTurns(history)
             ' 0. 较早几轮的图片一律换成占位: 每轮都重发很费, 认出的内容已经在后面的回答和工具调用里
             For i = 0 To turns.Count - 1 - KEEP_FULL_TURNS
@@ -38,11 +43,15 @@ Namespace AI
                     If m.Remove("reasoning_content") Then trimmed = True
                 Next
             Next
-            ' 2. 还超就丢最早的整轮
-            While turns.Count > 1 AndAlso Size(turns) > budget
-                turns.RemoveAt(0)
-                trimmed = True
-            End While
+            ' 2. 还超就从最早的整轮丢起, 一次丢到预算的七成以下
+            If Size(turns) > budget Then
+                Dim target = CInt(budget * DROP_TO)
+                While turns.Count > 1 AndAlso Size(turns) > target
+                    turns.RemoveAt(0)
+                    dropped = True
+                    trimmed = True
+                End While
+            End If
             Return Join(turns)
         End Function
 

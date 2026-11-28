@@ -53,7 +53,8 @@ Namespace AI
             For Each t In _tools
                 Dim d = t.Spec.Title & ": " & t.Spec.Description
                 If t.Note <> "" Then d &= " " & t.Note
-                If t.Spec.Writes Then d &= " (会改数据: 执行前系统会把" & If(t.Spec.Preview, "预览", "参数") & "给用户看并等用户确认。)"
+                ' 会改数据的工具怎么用 (不必先口头征求同意等) 写在系统提示词里
+                If t.Spec.Writes Then d &= " (会改数据: 执行前系统把" & If(t.Spec.Preview, "预览", "参数") & "给用户看并等确认。)"
                 list.Add(New JObject From {
                     {"type", "function"},
                     {"function", New JObject From {{"name", t.ToolName}, {"description", d}, {"parameters", t.Spec.ParametersSchema()}}}})

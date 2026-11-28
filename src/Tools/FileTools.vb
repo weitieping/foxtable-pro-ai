@@ -21,7 +21,7 @@ Namespace AI
             Dim list As New List(Of JObject)
             If Not Owns(READ_FILE) Then Return list
             list.Add(ReadTools.Fn(READ_FILE,
-                "读用户上传的表格文件的若干行 (提问时只附了前 20 行), 一次最多 " & MAX_ROWS & " 行。要导入时不必读完, 用 import_rows 按列对应导入。",
+                "读用户上传的表格文件的若干行 (提问时只附了前 20 行), 一次最多 " & MAX_ROWS & " 行。",
                 New JObject From {
                     {"file", New JObject From {{"type", "string"}, {"description", "文件编号, 如 f1"}}},
                     {"sheet", New JObject From {{"type", "string"}, {"description", "工作表名, 不填为第一个"}}},

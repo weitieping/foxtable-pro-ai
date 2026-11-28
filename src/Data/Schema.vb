@@ -50,17 +50,19 @@ Namespace AI
             Return Name & "(" & String.Join(", ", parts) & ")"
         End Function
 
-        Public Function ToJson() As JObject
-            Dim o As New JObject From {{"name", Name}, {"type", KindName}}
-            If Not String.IsNullOrEmpty(Caption) AndAlso Caption <> Name Then o("caption") = Caption
-            If Kind = ColumnKind.Text AndAlso MaxLength > 0 Then o("max_length") = MaxLength
-            If Kind = ColumnKind.Number AndAlso Decimals > 0 Then o("decimals") = Decimals
-            If Not String.IsNullOrEmpty(Expression) Then o("expression") = Expression
-            If Unique Then o("unique") = True
-            If Required Then o("required") = True
-            If Not Writable Then o("readonly") = True
-            If Not String.IsNullOrEmpty(ComboList) Then o("options") = New JArray(SplitList(ComboList).Cast(Of Object)().ToArray())
-            Return o
+        ''' describe_table 里的一列, 如 "金额(数值, 标题:订单金额, 2位小数, 必填)"。比逐列的 JSON 对象省一半左右的字。
+        ''' tableWritable: 表放行了写入时才标只读列 (只读表的列都不能写, 不必逐列标)。
+        Public Function Detail(tableWritable As Boolean) As String
+            Dim parts As New List(Of String) From {KindName}
+            If Not String.IsNullOrEmpty(Caption) AndAlso Caption <> Name Then parts.Add("标题:" & Caption)
+            If Kind = ColumnKind.Text AndAlso MaxLength > 0 Then parts.Add("最长" & MaxLength)
+            If Kind = ColumnKind.Number AndAlso Decimals > 0 Then parts.Add(Decimals & "位小数")
+            If Not String.IsNullOrEmpty(Expression) Then parts.Add("表达式:" & Expression)
+            If Unique Then parts.Add("唯一")
+            If Required Then parts.Add("必填")
+            If tableWritable AndAlso Not Writable Then parts.Add("只读")
+            If Not String.IsNullOrEmpty(ComboList) Then parts.Add("可选值:" & String.Join("/", SplitList(ComboList)))
+            Return Name & "(" & String.Join(", ", parts) & ")"
         End Function
 
         Private Shared Function SplitList(s As String) As String()
@@ -107,6 +109,13 @@ Namespace AI
             End Get
         End Property
 
+        ''' 有写入工具可用: 放行了写入, 且至少有一列能写 (与 WriteTools 的判断一致)。
+        Public ReadOnly Property CanWrite As Boolean
+            Get
+                Return Writable AndAlso Columns.Any(Function(c) c.Writable)
+            End Get
+        End Property
+
         Public Function Column(name As String) As ColumnInfo
             If name Is Nothing Then Return Nothing
             name = name.Trim()
@@ -126,7 +135,7 @@ Namespace AI
             If Not String.IsNullOrEmpty(Description) Then o("description") = Description
             o("rows") = LoadedRows
             If PartiallyLoaded Then o("note") = "只加载了部分数据, 查询和统计只针对已加载的行。"
-            o("columns") = New JArray(Columns.Select(Function(c) c.ToJson()).Cast(Of Object)().ToArray())
+            o("columns") = New JArray(Columns.Select(Function(c) c.Detail(Writable)).Cast(Of Object)().ToArray())
             If Relations.Count > 0 Then o("relations") = New JArray(Relations.Cast(Of Object)().ToArray())
             If Writable Then
                 o("writable") = True
@@ -296,28 +305,40 @@ Namespace AI
             End Try
         End Function
 
-        ''' 系统提示词里的"可查询的表"一节。列总数多时只列表名, 细节让模型调 describe_table。
-        Public Function PromptSection(tables As List(Of TableInfo), Optional maxColumns As Integer = 300) As String
-            Dim sb As New StringBuilder()
-            Dim brief = tables.Sum(Function(t) t.Columns.Count) > maxColumns
+        ''' 按模型给的表名找表: 表名或标题; 照抄了 list_tables 的 "表名(标题)" 也认。找不到时为 Nothing。
+        Public Function FindTable(tables As IEnumerable(Of TableInfo), name As String) As TableInfo
+            If String.IsNullOrWhiteSpace(name) Then Return Nothing
+            Dim n = name.Trim()
+            Dim hit = PickTable(tables, n)
+            If hit Is Nothing Then
+                Dim i = n.IndexOfAny({"("c, "（"c})
+                If i > 0 Then hit = PickTable(tables, n.Substring(0, i).Trim())
+            End If
+            Return hit
+        End Function
+
+        Private Function PickTable(tables As IEnumerable(Of TableInfo), n As String) As TableInfo
+            Return If(tables.FirstOrDefault(Function(x) String.Equals(x.Name, n, StringComparison.OrdinalIgnoreCase)),
+                      tables.FirstOrDefault(Function(x) String.Equals(x.Caption, n, StringComparison.OrdinalIgnoreCase)))
+        End Function
+
+        ''' list_tables 的结果: 每张表一行, 如 "订单(销售订单) [可写, 明细表: 订单明细]: 说明"。
+        ''' 列、关联、只加载了部分数据由 describe_table 和查询结果给出。
+        Public Function Listing(tables As List(Of TableInfo)) As List(Of String)
+            Dim res As New List(Of String)
             For Each t In tables
-                sb.Append("### ").AppendLine(t.Display)
-                If Not String.IsNullOrEmpty(t.Description) Then sb.Append("说明: ").AppendLine(t.Description)
-                If brief Then
-                    sb.Append("共 ").Append(t.Columns.Count).AppendLine(" 列, 用 describe_table 查看。")
-                Else
-                    sb.Append("列: ").AppendLine(String.Join("; ", t.Columns.Select(Function(c) c.Brief())))
+                Dim sb As New StringBuilder(t.Display)
+                If t.CanWrite Then
+                    sb.Append(" [可写")
+                    If t.Details.Count > 0 Then sb.Append(", 明细表: ").Append(String.Join("、", t.Details.Select(Function(d) d.Child)))
+                    sb.Append("]")
                 End If
-                If t.Relations.Count > 0 Then sb.Append("关联: ").AppendLine(String.Join("; ", t.Relations))
-                If t.Writable Then
-                    sb.Append("可写: 可用 add_rows 新增、update_rows 修改")
-                    If t.Details.Count > 0 Then sb.Append("; 新增时可在每行的 details 里带上明细表 ").Append(String.Join("、", t.Details.Select(Function(d) d.Child))).Append(" 的行, 关联列自动填")
-                    sb.AppendLine("。标了必填的列新增时必须给。")
+                If Not String.IsNullOrWhiteSpace(t.Description) Then
+                    sb.Append(": ").Append(String.Join(" ", t.Description.Split({vbCr(0), vbLf(0)}, StringSplitOptions.RemoveEmptyEntries).Select(Function(s) s.Trim())))
                 End If
-                If t.PartiallyLoaded Then sb.AppendLine("注意: 只加载了部分数据, 查询和统计只针对已加载的行。")
-                sb.AppendLine()
+                res.Add(sb.ToString())
             Next
-            Return sb.ToString()
+            Return res
         End Function
     End Module
 
