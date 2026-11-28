@@ -1,5 +1,6 @@
 Imports System.Threading
 Imports System.Threading.Tasks
+Imports Foxtable
 
 Namespace AI
 
@@ -45,7 +46,7 @@ Namespace AI
             Public Question As String
             ''' 交给模型的用户消息: 文本, 或带图片的内容数组
             Public UserContent As Object
-            Public Caller As Object
+            Public Caller As LLMCaller
             Public Tools As Toolbox
             Public Prompt As String
             Public History As JArray
@@ -506,7 +507,7 @@ Namespace AI
 
         Private Async Function RunTurnAsync(turn As Turn) As Task
             For attempt = 0 To MAX_RETRIES
-                Dim caller As Object
+                Dim caller As LLMCaller
                 Dim ok As Boolean
                 Dim err As String = ""
                 Try
@@ -554,7 +555,7 @@ Namespace AI
         End Function
 
         ''' 按模板新建这一轮的 caller: 历史用副本, 失败或取消时原历史不动, 相当于把这轮截掉。
-        Private Function NewCaller(turn As Turn) As Object
+        Private Function NewCaller(turn As Turn) As LLMCaller
             Dim c = Llm.CloneConfig(_ai.Caller)
             ' LLMCaller 只在 Messages 为空时才用 SystemPrompt, 之后各轮沿用历史里第一轮的。
             ' 提示词每轮都变 (现场、权限、技能库), 所以自己放在开头; 历史里不留 system 消息 (见 HistoryTrimmer)
@@ -576,7 +577,7 @@ Namespace AI
             Return c
         End Function
 
-        Private Sub OnChunk(turn As Turn, caller As Object, kind As String, text As String)
+        Private Sub OnChunk(turn As Turn, caller As LLMCaller, kind As String, text As String)
             If turn.Cancelled Then
                 If Not turn.InTool Then Llm.Cancel(caller)
                 Return

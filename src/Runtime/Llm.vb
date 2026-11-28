@@ -1,5 +1,6 @@
 Imports System.Reflection
 Imports System.Threading.Tasks
+Imports Foxtable
 
 Namespace AI
 
@@ -17,9 +18,10 @@ Namespace AI
         End Property
 
         ''' 新建一个 LLMCaller 对象。
-        Public Shared Function Create(url As String, model As String, key As String) As Object
+        Public Shared Function Create(url As String, model As String, key As String) As LLMCaller
             If Not Available Then Throw New NotSupportedException("AI 面板需要狐表 2026-11-16 或更新的版本, 请先升级狐表。")
-            Return Activator.CreateInstance(_type.Value, url, model, key)
+
+            Return New LLMCaller(url, model, key)
         End Function
 
         ' 每轮新建 caller 时不从模板复制的属性: 由 ProAI 自己管, 或是上一次调用的结果
@@ -29,8 +31,8 @@ Namespace AI
 
         ''' 按模板新建一个 caller: 复制模板上开发者设的模型参数 (model、temperature、Headers ...)。
         ''' 每轮都用新的 caller, 被作废的上一轮即使还在跑也不会和这一轮抢同一个对象。
-        Public Shared Function CloneConfig(template As Object) As Object
-            Dim c = Activator.CreateInstance(_type.Value)
+        Public Shared Function CloneConfig(template As Object) As LLMCaller
+            Dim c = New LLMCaller()
             For Each p In _type.Value.GetProperties(BindingFlags.Public Or BindingFlags.Instance)
                 If NotCopied.Contains(p.Name) OrElse Not p.CanRead OrElse Not p.CanWrite OrElse p.GetIndexParameters().Length > 0 Then Continue For
                 Try
@@ -45,23 +47,17 @@ Namespace AI
             Return c
         End Function
 
-        Private Shared Function Method(name As String, ParamArray types() As Type) As MethodInfo
-            Dim m = _type.Value.GetMethod(name, BindingFlags.Public Or BindingFlags.Instance, Nothing, types, Nothing)
-            If m Is Nothing Then Throw New MissingMethodException("Foxtable.LLMCaller", name)
-            Return m
-        End Function
-
-        Public Shared Sub AddJsonTool(caller As Object, json As String)
-            Method("AddJsonTool", GetType(String)).Invoke(caller, New Object() {json})
+        Public Shared Sub AddJsonTool(caller As LLMCaller, json As String)
+            caller.AddJsonTool(json)
         End Sub
 
-        Public Shared Function GetResultAsync(caller As Object) As Task(Of Boolean)
-            Return DirectCast(Method("GetResultAsync").Invoke(caller, Nothing), Task(Of Boolean))
+        Public Shared Function GetResultAsync(caller As LLMCaller) As Task(Of Boolean)
+            Return caller.GetResultAsync()
         End Function
 
-        Public Shared Sub Cancel(caller As Object)
+        Public Shared Sub Cancel(caller As LLMCaller)
             Try
-                Method("Cancel").Invoke(caller, Nothing)
+                caller.Cancel()
             Catch
             End Try
         End Sub

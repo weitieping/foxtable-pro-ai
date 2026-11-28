@@ -1,5 +1,6 @@
 Imports System.Globalization
 Imports System.Text
+Imports Foxtable
 Imports FoxtablePro.AI
 
 ''' 运行期 AI 助手: 嵌在系统里, 让使用系统的人用自然语言查数、录单、导入。
@@ -16,7 +17,7 @@ Imports FoxtablePro.AI
 Public NotInheritable Class ProAI
     Implements IDisposable
 
-    Private ReadOnly _template As Object
+    Private ReadOnly _template As LLMCaller
     Private ReadOnly _tables As New AITables()
     Private ReadOnly _forms As New AIForms()
     Private ReadOnly _functions As New AIFunctions()
@@ -135,7 +136,7 @@ Public NotInheritable Class ProAI
 
     ''' 底层的 LLMCaller (狐表官方), 可以设模型参数, 如 ai.Caller.temperature = 0.3。
     ''' 狐表低于 2026-11-16 时为 Nothing。
-    Public ReadOnly Property Caller As Object
+    Public ReadOnly Property Caller As LLMCaller
         Get
             Return _template
         End Get
